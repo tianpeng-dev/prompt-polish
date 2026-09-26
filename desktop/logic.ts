@@ -41,8 +41,8 @@ export function normalizeSettings(value: unknown): DesktopSettings {
   }
   const position =
     isRecord(value.windowPosition) &&
-      Number.isFinite(value.windowPosition.x) &&
-      Number.isFinite(value.windowPosition.y)
+    Number.isFinite(value.windowPosition.x) &&
+    Number.isFinite(value.windowPosition.y)
       ? {
           x: Math.round(value.windowPosition.x as number),
           y: Math.round(value.windowPosition.y as number),
@@ -91,8 +91,8 @@ export function validateSettingsUpdate(value: unknown): SettingsUpdate {
   }
   return {
     launchAtLogin: value.launchAtLogin as boolean | undefined,
-    optimizeClipboardOnShortcut:
-      value.optimizeClipboardOnShortcut as boolean | undefined,
+    optimizeClipboardOnShortcut: value.optimizeClipboardOnShortcut as
+      boolean | undefined,
     shortcut: value.shortcut as string | undefined,
     alwaysOnTop: value.alwaysOnTop as boolean | undefined,
   };
@@ -144,9 +144,10 @@ export function validateShortcut(value: unknown): string {
   if (!primaryModifier) {
     throw new RangeError("快捷键必须包含 Command 或 Ctrl。");
   }
-  const additionalModifiers = primaryModifier === "CommandOrControl"
-    ? ["Control", "Alt", "Shift"]
-    : ["Alt", "Shift"];
+  const additionalModifiers =
+    primaryModifier === "CommandOrControl"
+      ? ["Control", "Alt", "Shift"]
+      : ["Alt", "Shift"];
   if (!additionalModifiers.some((item) => modifiers.has(item))) {
     throw new RangeError("请再加入 Alt、Control 或 Shift。");
   }
@@ -343,9 +344,7 @@ export function loginItemSettings(
 }
 
 export function trayIconName(platform: DesktopPlatform): string {
-  return platform === "darwin"
-    ? "tray-iconTemplate.png"
-    : "tray-icon-win.png";
+  return platform === "darwin" ? "tray-iconTemplate.png" : "tray-icon-win.png";
 }
 
 export function shouldShowWindowAtStartup(
@@ -367,25 +366,60 @@ export function createClipboardController(dependencies: {
   clipboard: ClipboardAdapter;
   optimize(input: string): Promise<OptimizeResponse>;
 }) {
-  let undoText: string | null = null;
+  let sequence = 0;
+  let undoEntry: {
+    source: string;
+    output: string;
+    operationId: number;
+  } | null = null;
+  let running = false;
 
   return {
-    async optimize(): Promise<ClipboardOptimizeResult> {
-      const source = validateInput(dependencies.clipboard.readText());
-      const response = await dependencies.optimize(source);
-      dependencies.clipboard.writeText(response.optimized);
-      undoText = source;
-      return { source, response };
+    async optimize(expectedSource?: string): Promise<ClipboardOptimizeResult> {
+      if (running) throw new Error("正在处理另一项优化，请稍候。");
+      const source = dependencies.clipboard.readText();
+      if (expectedSource !== undefined && source !== expectedSource)
+        throw new TypeError("剪贴板已变化，请重新触发优化。");
+      const validated = validateInput(source);
+      running = true;
+      const operationId = ++sequence;
+      try {
+        const response = await dependencies.optimize(validated);
+        if (!response.optimized.trim() || response.optimized.length > 10_000)
+          throw new RangeError("优化结果长度无效。");
+        const clipboardUpdated = dependencies.clipboard.readText() === source;
+        if (clipboardUpdated) {
+          dependencies.clipboard.writeText(response.optimized);
+          undoEntry = { source, output: response.optimized, operationId };
+        }
+        return { source, response, operationId, clipboardUpdated };
+      } finally {
+        running = false;
+      }
     },
-    undo(): ClipboardUndoResult {
-      if (undoText === null) return { restored: false };
-      const text = undoText;
-      dependencies.clipboard.writeText(text);
-      undoText = null;
-      return { restored: true, text };
+    undo(operationId?: number): ClipboardUndoResult {
+      if (!undoEntry || running) return { restored: false };
+      if (
+        (operationId !== undefined && operationId !== undoEntry.operationId) ||
+        dependencies.clipboard.readText() !== undoEntry.output
+      ) {
+        return { restored: false, conflict: true };
+      }
+      const entry = undoEntry;
+      dependencies.clipboard.writeText(entry.source);
+      undoEntry = null;
+      return {
+        restored: true,
+        text: entry.source,
+        operationId: entry.operationId,
+      };
     },
     canUndo(): boolean {
-      return undoText !== null;
+      return (
+        !running &&
+        undoEntry !== null &&
+        dependencies.clipboard.readText() === undoEntry.output
+      );
     },
   };
 }

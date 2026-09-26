@@ -54,12 +54,11 @@ describe("desktop settings", () => {
   });
 
   it("migrates existing settings with shortcut clipboard optimization disabled", () => {
-    const migrated =
-      normalizeSettings({
-        schemaVersion: 1,
-        launchAtLogin: false,
-        shortcut: "Command+Option+K",
-      });
+    const migrated = normalizeSettings({
+      schemaVersion: 1,
+      launchAtLogin: false,
+      shortcut: "Command+Option+K",
+    });
     expect(migrated).toMatchObject({
       schemaVersion: 2,
       launchAtLogin: false,
@@ -106,7 +105,9 @@ describe("desktop settings", () => {
       }).shortcut,
     ).toBe(DEFAULT_SETTINGS.shortcut);
     expect(formatShortcut(DEFAULT_SETTINGS.shortcut, "darwin")).toBe("⌥⌘P");
-    expect(formatShortcut(DEFAULT_SETTINGS.shortcut, "win32")).toBe("Ctrl+Alt+P");
+    expect(formatShortcut(DEFAULT_SETTINGS.shortcut, "win32")).toBe(
+      "Ctrl+Alt+P",
+    );
   });
 
   it("rejects invalid pin settings at the IPC boundary", () => {
@@ -141,8 +142,9 @@ describe("desktop settings", () => {
       enabled: true,
       name: "精炼台",
     });
-    expect(shouldShowWindowAtStartup("win32", ["app.exe", "--hidden"], false))
-      .toBe(false);
+    expect(
+      shouldShowWindowAtStartup("win32", ["app.exe", "--hidden"], false),
+    ).toBe(false);
     expect(shouldShowWindowAtStartup("win32", ["app.exe"], false)).toBe(true);
     expect(shouldShowWindowAtStartup("darwin", [], true)).toBe(false);
   });
@@ -257,7 +259,11 @@ describe("clipboard optimization", () => {
     expect(result.source).toBe("修复登录");
     expect(clipboardText).toBe("请定位并修复登录问题。");
     expect(controller.canUndo()).toBe(true);
-    expect(controller.undo()).toEqual({ restored: true, text: "修复登录" });
+    expect(controller.undo()).toEqual({
+      restored: true,
+      text: "修复登录",
+      operationId: result.operationId,
+    });
     expect(clipboardText).toBe("修复登录");
     expect(controller.undo()).toEqual({ restored: false });
   });

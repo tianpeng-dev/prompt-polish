@@ -11,7 +11,10 @@ import {
   Tray,
 } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+import { atomicWrite, createSerialQueue } from "./storage.js";
+import { assertTrustedSender } from "./ipc-security.js";
 import path from "node:path";
 import { getTraeHealth } from "../src/trae-health.js";
 import { TraeApiError } from "../src/trae-client.js";
@@ -33,10 +36,7 @@ import {
   validateSettingsUpdate,
   validateShortcut,
 } from "./logic.js";
-import {
-  TraeLoginRequiredError,
-  TraeWebAuth,
-} from "./trae-web-auth.js";
+import { TraeLoginRequiredError, TraeWebAuth } from "./trae-web-auth.js";
 import {
   IPC_CHANNELS,
   RENDERER_EVENTS,
@@ -63,10 +63,11 @@ let moveSettledTimer: ReturnType<typeof setTimeout> | null = null;
 let programmaticMoveTimer: ReturnType<typeof setTimeout> | null = null;
 let programmaticPosition: { x: number; y: number } | null = null;
 let optimizePrompt:
-  | ((input: unknown, token: string) => Promise<OptimizeResponse>)
-  | null = null;
-let clipboardController: ReturnType<typeof createClipboardController> | null = null;
+  ((input: unknown, token: string) => Promise<OptimizeResponse>) | null = null;
+let clipboardController: ReturnType<typeof createClipboardController> | null =
+  null;
 let traeAuth: TraeWebAuth | null = null;
+const settingsQueue = createSerialQueue();
 
 function userMessage(error: unknown): string {
   if (
@@ -103,19 +104,13 @@ async function readSettings(): Promise<DesktopSettings> {
 }
 
 async function saveSettings(value: DesktopSettings): Promise<void> {
-  await mkdir(path.dirname(settingsPath), { recursive: true });
-  const temporaryPath = `${settingsPath}.${process.pid}.tmp`;
-  await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  await rename(temporaryPath, settingsPath);
+  await atomicWrite(settingsPath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function applyLoginItem(): void {
+function applyLoginItem(value = settings.launchAtLogin): void {
   if (!app.isPackaged || PLATFORM === "other") return;
   app.setLoginItemSettings(
-    loginItemSettings(PLATFORM, settings.launchAtLogin, process.execPath),
+    loginItemSettings(PLATFORM, value, process.execPath),
   );
 }
 
@@ -175,22 +170,22 @@ function resolvedWindowPosition(): { x: number; y: number } {
 }
 
 async function persistWindowPosition(position: { x: number; y: number }) {
-  const normalized = { x: Math.round(position.x), y: Math.round(position.y) };
-  if (
-    settings.windowPosition?.x === normalized.x &&
-    settings.windowPosition.y === normalized.y
-  ) {
-    return;
-  }
-  const previous = settings;
-  const next = { ...settings, windowPosition: normalized };
-  settings = next;
-  try {
-    await saveSettings(next);
-  } catch {
-    if (settings === next) settings = previous;
-    sendRendererEvent(RENDERER_EVENTS.operationError, "窗口位置未保存。");
-  }
+  return settingsQueue(async () => {
+    const normalized = { x: Math.round(position.x), y: Math.round(position.y) };
+    if (
+      settings.windowPosition?.x === normalized.x &&
+      settings.windowPosition.y === normalized.y
+    ) {
+      return;
+    }
+    const next = { ...settings, windowPosition: normalized };
+    try {
+      await saveSettings(next);
+      settings = next;
+    } catch {
+      sendRendererEvent(RENDERER_EVENTS.operationError, "窗口位置未保存。");
+    }
+  });
 }
 
 function setMainWindowPosition(position: { x: number; y: number }): void {
@@ -218,10 +213,13 @@ async function settleWindowPosition(): Promise<void> {
 
 function scheduleWindowSettle(): void {
   if (moveSettledTimer !== null) clearTimeout(moveSettledTimer);
-  moveSettledTimer = setTimeout(() => {
-    moveSettledTimer = null;
-    void settleWindowPosition();
-  }, PLATFORM === "darwin" ? 120 : 0);
+  moveSettledTimer = setTimeout(
+    () => {
+      moveSettledTimer = null;
+      void settleWindowPosition();
+    },
+    PLATFORM === "darwin" ? 120 : 0,
+  );
 }
 
 function handleWindowMove(): void {
@@ -279,7 +277,8 @@ function handleGlobalShortcut(): void {
 
   showWindow();
   try {
-    const input = validateInput(clipboard.readText());
+    const input = clipboard.readText();
+    validateInput(input);
     sendRendererEvent(RENDERER_EVENTS.shortcutOptimizeRequested, input);
   } catch (error) {
     sendRendererEvent(RENDERER_EVENTS.operationError, userMessage(error));
@@ -297,54 +296,75 @@ function registerShortcut(shortcut: string): boolean {
   return registered;
 }
 
-async function updateSettings(update: SettingsUpdate): Promise<SettingsSnapshot> {
-  const next = { ...settings };
-  if (typeof update.launchAtLogin === "boolean") {
-    next.launchAtLogin = update.launchAtLogin;
-  }
-  if (typeof update.optimizeClipboardOnShortcut === "boolean") {
-    next.optimizeClipboardOnShortcut = update.optimizeClipboardOnShortcut;
-  }
-  if (typeof update.alwaysOnTop === "boolean") {
-    next.alwaysOnTop = update.alwaysOnTop;
-  }
+async function updateSettings(
+  update: SettingsUpdate,
+): Promise<SettingsSnapshot> {
+  return settingsQueue(async () => {
+    const previous = settings;
+    const next = { ...settings };
+    if (typeof update.launchAtLogin === "boolean") {
+      next.launchAtLogin = update.launchAtLogin;
+    }
+    if (typeof update.optimizeClipboardOnShortcut === "boolean") {
+      next.optimizeClipboardOnShortcut = update.optimizeClipboardOnShortcut;
+    }
+    if (typeof update.alwaysOnTop === "boolean") {
+      next.alwaysOnTop = update.alwaysOnTop;
+    }
 
-  let newlyRegisteredShortcut: string | null = null;
-  const previousRegisteredShortcut = registeredShortcut;
-  if (update.shortcut !== undefined) {
-    const candidate = validateShortcut(update.shortcut);
-    if (candidate !== registeredShortcut) {
-      if (!globalShortcut.register(candidate, handleGlobalShortcut)) {
-        shortcutError = `${formatShortcut(candidate, PLATFORM)} 已被其他应用占用，原快捷键仍然有效。`;
-        return settingsSnapshot();
+    let newlyRegisteredShortcut: string | null = null;
+    const previousRegisteredShortcut = registeredShortcut;
+    if (update.shortcut !== undefined) {
+      const candidate = validateShortcut(update.shortcut);
+      if (candidate !== registeredShortcut) {
+        if (!globalShortcut.register(candidate, handleGlobalShortcut)) {
+          shortcutError = `${formatShortcut(candidate, PLATFORM)} 已被其他应用占用，原快捷键仍然有效。`;
+          return settingsSnapshot();
+        }
+        newlyRegisteredShortcut = candidate;
       }
-      newlyRegisteredShortcut = candidate;
+      next.shortcut = candidate;
     }
-    next.shortcut = candidate;
-  }
 
-  try {
-    await saveSettings(next);
-  } catch (error) {
+    try {
+      if (next.launchAtLogin !== previous.launchAtLogin)
+        applyLoginItem(next.launchAtLogin);
+      if (next.alwaysOnTop !== previous.alwaysOnTop)
+        mainWindow?.setAlwaysOnTop(next.alwaysOnTop);
+      await saveSettings(next);
+    } catch (error) {
+      if (next.launchAtLogin !== previous.launchAtLogin) {
+        try {
+          applyLoginItem(previous.launchAtLogin);
+        } catch {
+          /* Preserve the original failure. */
+        }
+      }
+      if (next.alwaysOnTop !== previous.alwaysOnTop) {
+        try {
+          mainWindow?.setAlwaysOnTop(previous.alwaysOnTop);
+        } catch {
+          // A closing window must not prevent shortcut rollback below.
+        }
+      }
+      if (newlyRegisteredShortcut) {
+        globalShortcut.unregister(newlyRegisteredShortcut);
+      }
+      throw error;
+    }
     if (newlyRegisteredShortcut) {
-      globalShortcut.unregister(newlyRegisteredShortcut);
+      if (previousRegisteredShortcut) {
+        globalShortcut.unregister(previousRegisteredShortcut);
+      }
+      registeredShortcut = newlyRegisteredShortcut;
     }
-    throw error;
-  }
-  if (newlyRegisteredShortcut) {
-    if (previousRegisteredShortcut) {
-      globalShortcut.unregister(previousRegisteredShortcut);
-    }
-    registeredShortcut = newlyRegisteredShortcut;
-  }
-  settings = next;
-  shortcutError = null;
-  applyLoginItem();
-  mainWindow?.setAlwaysOnTop(settings.alwaysOnTop);
-  rebuildTrayMenu();
-  const snapshot = settingsSnapshot();
-  sendRendererEvent(RENDERER_EVENTS.settingsChanged, snapshot);
-  return snapshot;
+    settings = next;
+    shortcutError = null;
+    rebuildTrayMenu();
+    const snapshot = settingsSnapshot();
+    sendRendererEvent(RENDERER_EVENTS.settingsChanged, snapshot);
+    return snapshot;
+  });
 }
 
 async function runExclusive<T>(operation: () => Promise<T>): Promise<T> {
@@ -365,8 +385,8 @@ async function optimizeWithWebAuth(input: unknown): Promise<OptimizeResponse> {
     return await optimizePrompt(validated, token);
   } catch (error) {
     if (!(error instanceof TraeApiError) || error.kind !== "auth") throw error;
-    traeAuth.invalidate();
-    token = await traeAuth.login(false);
+    await traeAuth.invalidate();
+    token = await traeAuth.getToken(true);
     return optimizePrompt(validated, token);
   }
 }
@@ -374,18 +394,24 @@ async function optimizeWithWebAuth(input: unknown): Promise<OptimizeResponse> {
 function loginFromTray(): void {
   if (!traeAuth) return;
   const force = traeAuth.authenticated;
-  void traeAuth
-    .login(force)
+  void runExclusive(() => traeAuth!.login(force))
     .then(() => notify("精炼台", "Trae 登录成功。"))
     .catch((error) => notify("Trae 登录未完成", userMessage(error)));
 }
 
-async function optimizeClipboardWithFeedback() {
+async function optimizeClipboardWithFeedback(expectedSource: string) {
   if (!clipboardController) throw new Error("应用尚未准备完成。");
   try {
-    const result = await runExclusive(() => clipboardController!.optimize());
+    const result = await runExclusive(() =>
+      clipboardController!.optimize(expectedSource),
+    );
     rebuildTrayMenu();
-    notify("精炼台", "已优化并更新剪贴板。");
+    notify(
+      "精炼台",
+      result.clipboardUpdated
+        ? "已优化并更新剪贴板。"
+        : "优化完成；剪贴板已有新内容，未覆盖。",
+    );
     return result;
   } catch (error) {
     const message = userMessage(error);
@@ -394,24 +420,23 @@ async function optimizeClipboardWithFeedback() {
   }
 }
 
-function undoClipboard() {
+function undoClipboard(operationId?: number) {
   if (!clipboardController) return { restored: false };
-  const result = clipboardController.undo();
+  const result = clipboardController.undo(operationId);
   rebuildTrayMenu();
   if (result.restored) notify("精炼台", "已恢复优化前的剪贴板内容。");
   return result;
 }
 
 function optimizeClipboardFromTray(): void {
-  void optimizeClipboardWithFeedback()
-    .then((result) => {
-      showWindow();
-      sendRendererEvent(RENDERER_EVENTS.clipboardOptimized, result);
-    })
-    .catch((error) => {
-      showWindow();
-      sendRendererEvent(RENDERER_EVENTS.operationError, userMessage(error));
-    });
+  showWindow();
+  try {
+    const input = clipboard.readText();
+    validateInput(input);
+    sendRendererEvent(RENDERER_EVENTS.shortcutOptimizeRequested, input);
+  } catch (error) {
+    sendRendererEvent(RENDERER_EVENTS.operationError, userMessage(error));
+  }
 }
 
 function rebuildTrayMenu(): void {
@@ -492,7 +517,7 @@ async function createWindow(): Promise<void> {
     hasShadow: true,
     backgroundColor: "#202125",
     webPreferences: {
-      preload: path.join(appRoot, "desktop", "preload.cjs"),
+      preload: path.join(appRoot, "dist", "desktop", "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -519,7 +544,9 @@ async function createWindow(): Promise<void> {
       mainWindow?.hide();
     }
   });
-  await mainWindow.loadFile(path.join(appRoot, "desktop", "renderer", "index.html"));
+  await mainWindow.loadFile(
+    path.join(appRoot, "desktop", "renderer", "index.html"),
+  );
 }
 
 function createTray(): void {
@@ -534,34 +561,50 @@ function createTray(): void {
 }
 
 function setupIpc(): void {
-  ipcMain.handle(IPC_CHANNELS.optimizerHealth, () =>
-    getTraeHealth(() => {
-      if (!traeAuth) throw new TraeLoginRequiredError();
-      return traeAuth.getToken(false);
-    }),
+  const expectedUrl = pathToFileURL(
+    path.join(app.getAppPath(), "desktop", "renderer", "index.html"),
+  ).href;
+  const handle: typeof ipcMain.handle = (channel, listener) =>
+    ipcMain.handle(channel, (event, ...args) => {
+      assertTrustedSender(event, mainWindow?.webContents, expectedUrl);
+      return listener(event, ...args);
+    });
+  handle(IPC_CHANNELS.optimizerHealth, () =>
+    getTraeHealth(
+      () => {
+        if (!traeAuth) throw new TraeLoginRequiredError();
+        return traeAuth.getToken(false);
+      },
+      (token) => traeAuth!.checkToken(token),
+    ),
   );
-  ipcMain.handle(IPC_CHANNELS.optimizerOptimize, async (_event, input: unknown) => {
+  handle(IPC_CHANNELS.optimizerOptimize, async (_event, input: unknown) => {
     try {
       return await runExclusive(() => optimizeWithWebAuth(input));
     } catch (error) {
       throw new Error(userMessage(error));
     }
   });
-  ipcMain.handle(IPC_CHANNELS.clipboardOptimize, () =>
-    optimizeClipboardWithFeedback(),
-  );
-  ipcMain.handle(IPC_CHANNELS.clipboardUndo, () => undoClipboard());
-  ipcMain.handle(IPC_CHANNELS.clipboardWrite, (_event, value: unknown) => {
-    if (typeof value !== "string" || value.length > 10_000) {
-      throw new TypeError("复制内容无效。");
-    }
-    clipboard.writeText(value);
+  handle(IPC_CHANNELS.clipboardOptimize, (_event, input: unknown) => {
+    validateInput(input);
+    return optimizeClipboardWithFeedback(input as string);
   });
-  ipcMain.handle(IPC_CHANNELS.settingsGet, () => settingsSnapshot());
-  ipcMain.handle(IPC_CHANNELS.settingsUpdate, (_event, value: unknown) => {
+  handle(IPC_CHANNELS.clipboardUndo, (_event, operationId: unknown) => {
+    if (
+      operationId !== undefined &&
+      (typeof operationId !== "number" ||
+        !Number.isSafeInteger(operationId) ||
+        operationId < 1)
+    ) {
+      throw new TypeError("撤销请求无效。");
+    }
+    return undoClipboard(operationId as number | undefined);
+  });
+  handle(IPC_CHANNELS.settingsGet, () => settingsSnapshot());
+  handle(IPC_CHANNELS.settingsUpdate, (_event, value: unknown) => {
     return updateSettings(validateSettingsUpdate(value));
   });
-  ipcMain.handle(IPC_CHANNELS.windowHide, () => mainWindow?.hide());
+  handle(IPC_CHANNELS.windowHide, () => mainWindow?.hide());
 }
 
 async function initialize(): Promise<void> {
@@ -608,9 +651,8 @@ async function initialize(): Promise<void> {
   rebuildTrayMenu();
   void traeAuth.warmup().then(() => rebuildTrayMenu());
 
-  const wasOpenedAtLogin = PLATFORM === "darwin"
-    ? app.getLoginItemSettings().wasOpenedAtLogin
-    : false;
+  const wasOpenedAtLogin =
+    PLATFORM === "darwin" ? app.getLoginItemSettings().wasOpenedAtLogin : false;
   if (shouldShowWindowAtStartup(PLATFORM, process.argv, wasOpenedAtLogin)) {
     showWindow();
   }
@@ -625,8 +667,11 @@ if (!app.requestSingleInstanceLock()) {
   app.on("window-all-closed", () => {
     // A menu-bar utility stays alive until the user chooses Quit.
   });
-  app.whenReady().then(initialize).catch((error) => {
-    notify("精炼台无法启动", userMessage(error));
-    app.quit();
-  });
+  app
+    .whenReady()
+    .then(initialize)
+    .catch((error) => {
+      notify("精炼台无法启动", userMessage(error));
+      app.quit();
+    });
 }

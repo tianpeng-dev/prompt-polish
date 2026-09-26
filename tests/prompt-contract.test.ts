@@ -12,7 +12,9 @@ describe("Trae optimizer prompt contract", () => {
     expect(prompt).toContain("You are Trae AI");
     expect(prompt).toContain("instruction expansion and enhancement");
     expect(prompt).toContain("placeholder_map");
-    expect(prompt).toContain("Output language MUST match the `user_input` language");
+    expect(prompt).toContain(
+      "Output language MUST match the `user_input` language",
+    );
     expect(prompt).not.toContain("⟦PROTECTED_");
     expect(prompt).not.toContain("gpt-5.6-sol");
   });

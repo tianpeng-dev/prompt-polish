@@ -15,7 +15,9 @@
   --refresh-base: #929aaa;
   --refresh-glow: #f2f6ff;
   --utility-rail-height: 44px;
-  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI", "Segoe UI", sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI",
+    "Segoe UI", sans-serif;
   background: var(--canvas);
   color: var(--text);
 }
@@ -73,7 +75,9 @@ textarea:focus-visible {
   border-radius: 12px;
   background: var(--surface);
   box-shadow: inset 0 1px rgba(255, 255, 255, 0.025);
-  transition: border-color 120ms ease, box-shadow 120ms ease;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
   app-region: no-drag;
   -webkit-app-region: no-drag;
 }
@@ -155,7 +159,10 @@ textarea:focus-visible {
   background: transparent;
   color: var(--muted);
   cursor: pointer;
-  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+  transition:
+    color 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease;
   app-region: no-drag;
   -webkit-app-region: no-drag;
 }
@@ -338,6 +345,23 @@ textarea[readonly] {
   color: var(--coral);
 }
 
+.toast:focus-visible {
+  outline: 2px solid var(--teal-bright);
+  outline-offset: 2px;
+}
+
+.toast.is-expanded {
+  max-height: 120px;
+  padding: 8px;
+  overflow: auto;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #222328;
+  user-select: text;
+}
+
 .settings-panel {
   position: absolute;
   z-index: 5;
@@ -454,6 +478,11 @@ textarea[readonly] {
   background: var(--teal);
 }
 
+.setting-row input:focus-visible + .switch {
+  outline: 2px solid var(--teal-bright);
+  outline-offset: 3px;
+}
+
 .setting-row input:checked + .switch::after {
   transform: translateX(14px);
 }
@@ -471,7 +500,11 @@ textarea[readonly] {
 }
 
 .shortcut-recorder kbd {
-  font: 700 11px/1 "SFMono-Regular", Menlo, Consolas, monospace;
+  font:
+    700 11px/1 "SFMono-Regular",
+    Menlo,
+    Consolas,
+    monospace;
 }
 
 .shortcut-recorder.is-recording,

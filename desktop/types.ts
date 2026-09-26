@@ -6,7 +6,6 @@ export const IPC_CHANNELS = {
   optimizerOptimize: "optimizer:optimize",
   clipboardOptimize: "clipboard:optimize",
   clipboardUndo: "clipboard:undo",
-  clipboardWrite: "clipboard:write",
   settingsGet: "settings:get",
   settingsUpdate: "settings:update",
   windowHide: "window:hide",
@@ -15,7 +14,6 @@ export const IPC_CHANNELS = {
 export const RENDERER_EVENTS = {
   blankRequested: "window:blank-requested",
   focusEditor: "window:focus-editor",
-  clipboardOptimized: "clipboard:optimized",
   clipboardRestored: "clipboard:restored",
   openSettings: "settings:open",
   settingsChanged: "settings:changed",
@@ -57,11 +55,15 @@ export type SettingsSnapshot = {
 export type ClipboardOptimizeResult = {
   source: string;
   response: OptimizeResponse;
+  operationId: number;
+  clipboardUpdated: boolean;
 };
 
 export type ClipboardUndoResult = {
   restored: boolean;
   text?: string;
+  operationId?: number;
+  conflict?: boolean;
 };
 
 export type DesktopBridge = {
@@ -70,9 +72,8 @@ export type DesktopBridge = {
     optimize(input: string): Promise<OptimizeResponse>;
   };
   clipboard: {
-    optimize(): Promise<ClipboardOptimizeResult>;
-    undo(): Promise<ClipboardUndoResult>;
-    write(text: string): Promise<void>;
+    optimize(expectedSource: string): Promise<ClipboardOptimizeResult>;
+    undo(operationId?: number): Promise<ClipboardUndoResult>;
   };
   settings: {
     get(): Promise<SettingsSnapshot>;
@@ -80,5 +81,23 @@ export type DesktopBridge = {
   };
   window: {
     hide(): Promise<void>;
+    onBlankRequested(callback: () => void): () => void;
+    onFocusEditor(callback: () => void): () => void;
+    onClipboardRestored(
+      callback: (result: ClipboardUndoResult) => void,
+    ): () => void;
+    onOpenSettings(callback: () => void): () => void;
+    onSettingsChanged(
+      callback: (snapshot: SettingsSnapshot) => void,
+    ): () => void;
+    onShortcutOptimizeRequested(callback: (input: string) => void): () => void;
+    onAuthStatus(
+      callback: (value: {
+        message: string;
+        tone?: string;
+        persistent?: boolean;
+      }) => void,
+    ): () => void;
+    onOperationError(callback: (message: string) => void): () => void;
   };
 };

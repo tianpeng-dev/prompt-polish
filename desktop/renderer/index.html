@@ -36,7 +36,13 @@
           <div class="refresh-text" id="refresh-text"></div>
         </div>
 
-        <p class="toast" id="status" role="status" aria-live="polite" hidden></p>
+        <p
+          class="toast"
+          id="status"
+          role="status"
+          aria-live="polite"
+          hidden
+        ></p>
 
         <button
           class="action-button"
@@ -58,10 +64,22 @@
         </button>
       </section>
 
-      <section class="settings-panel" id="settings-panel" aria-labelledby="settings-title" hidden>
+      <section
+        class="settings-panel"
+        id="settings-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-title"
+        hidden
+      >
         <div class="settings-heading window-drag-heading">
           <h2 id="settings-title">设置</h2>
-          <button class="close-button" id="settings-close" type="button" aria-label="关闭设置">
+          <button
+            class="close-button"
+            id="settings-close"
+            type="button"
+            aria-label="关闭设置"
+          >
             <span class="icon icon--close" aria-hidden="true"></span>
           </button>
         </div>
@@ -89,13 +107,22 @@
             <strong>全局快捷键</strong>
             <small>点击后按下新组合键</small>
           </span>
-          <button class="shortcut-recorder" id="shortcut-recorder" type="button">
+          <button
+            class="shortcut-recorder"
+            id="shortcut-recorder"
+            type="button"
+          >
             <kbd id="shortcut-label">⌥⌘P</kbd>
           </button>
         </div>
-        <p class="settings-status" id="settings-status" role="status" aria-live="polite"></p>
+        <p
+          class="settings-status"
+          id="settings-status"
+          role="status"
+          aria-live="polite"
+        ></p>
       </section>
     </main>
-    <script type="module" src="./app.js"></script>
+    <script type="module" src="../../dist/desktop/renderer/app.js"></script>
   </body>
 </html>

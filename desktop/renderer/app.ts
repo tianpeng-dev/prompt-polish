@@ -1,38 +1,76 @@
+import { formatShortcut } from "../logic.js";
+import type {
+  DesktopBridge,
+  DesktopPlatform,
+  DesktopSettings,
+  SettingsSnapshot,
+} from "../types.js";
+import type { OptimizeResponse } from "../../src/types.js";
+declare global {
+  interface Window {
+    refiner: DesktopBridge;
+  }
+}
 const bridge = window.refiner;
 
-const promptBox = document.querySelector(".prompt-box");
-const editor = document.querySelector("#editor");
-const refreshText = document.querySelector("#refresh-text");
-const actionButton = document.querySelector("#action-button");
-const pinButton = document.querySelector("#pin-button");
-const status = document.querySelector("#status");
-const settingsPanel = document.querySelector("#settings-panel");
-const settingsClose = document.querySelector("#settings-close");
-const launchToggle = document.querySelector("#launch-toggle");
-const shortcutClipboardToggle = document.querySelector("#shortcut-clipboard-toggle");
-const shortcutRecorder = document.querySelector("#shortcut-recorder");
-const shortcutLabel = document.querySelector("#shortcut-label");
-const settingsStatus = document.querySelector("#settings-status");
+function element<T extends HTMLElement>(selector: string): T {
+  const result = document.querySelector<T>(selector);
+  if (!result) throw new Error(`Missing UI element: ${selector}`);
+  return result;
+}
+
+const promptBox = element(".prompt-box");
+const editor = element<HTMLTextAreaElement>("#editor");
+const refreshText = element("#refresh-text");
+const actionButton = element<HTMLButtonElement>("#action-button");
+const pinButton = element<HTMLButtonElement>("#pin-button");
+const status = element("#status");
+const settingsPanel = element("#settings-panel");
+const settingsClose = element<HTMLButtonElement>("#settings-close");
+const launchToggle = element<HTMLInputElement>("#launch-toggle");
+const shortcutClipboardToggle = element<HTMLInputElement>(
+  "#shortcut-clipboard-toggle",
+);
+const shortcutRecorder = element<HTMLButtonElement>("#shortcut-recorder");
+const shortcutLabel = element("#shortcut-label");
+const settingsStatus = element("#settings-status");
+
+type UndoEntry = {
+  kind: "editor" | "clipboard" | "draft";
+  text: string;
+  output?: string;
+  operationId?: number;
+};
 
 const state = {
   busy: false,
   refreshing: false,
-  undo: null,
+  undo: null as UndoEntry | null,
+  revision: 0,
   settingsOpen: false,
   capturingShortcut: false,
-  platform: "darwin",
-  settings: null,
-  toastTimer: null,
+  platform: "darwin" as DesktopPlatform,
+  settings: null as DesktopSettings | null,
+  toastTimer: null as number | null,
 };
 
-function errorMessage(error) {
-  const raw = error instanceof Error ? error.message : String(error ?? "操作失败。");
+function errorMessage(error: unknown) {
+  const raw =
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof error.message === "string"
+      ? error.message
+      : String(error ?? "操作失败。");
   return raw.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "");
 }
 
-function showToast(message, tone = "neutral", persistent = false) {
+function showToast(message: string, tone = "neutral", persistent = false) {
   if (state.toastTimer !== null) window.clearTimeout(state.toastTimer);
   status.textContent = message;
+  status.title = message;
+  status.tabIndex = persistent ? 0 : -1;
+  status.classList.remove("is-expanded");
   status.dataset.tone = tone;
   status.hidden = false;
   state.toastTimer = persistent
@@ -43,11 +81,15 @@ function showToast(message, tone = "neutral", persistent = false) {
       }, 2_800);
 }
 
-function setMode(mode) {
+function setMode(mode: string = "optimize") {
   actionButton.dataset.mode = mode;
   const undoMode = mode === "undo";
-  actionButton.setAttribute("aria-label", undoMode ? "撤销优化" : "优化输入内容");
-  actionButton.title = undoMode ? "撤销优化" : "优化输入内容（Enter）";
+  const undoLabel = state.undo?.kind === "draft" ? "恢复上次草稿" : "撤销优化";
+  actionButton.setAttribute(
+    "aria-label",
+    undoMode ? undoLabel : "优化输入内容",
+  );
+  actionButton.title = undoMode ? undoLabel : "优化输入内容（Enter）";
   updateControls();
 }
 
@@ -72,7 +114,7 @@ function stopRefreshAnimation() {
   updateControls();
 }
 
-function startRefreshAnimation(value) {
+function startRefreshAnimation(value: string) {
   stopRefreshAnimation();
   refreshText.textContent = value;
   syncRefreshScroll();
@@ -83,8 +125,9 @@ function startRefreshAnimation(value) {
 }
 
 function handleEditorInput() {
+  state.revision += 1;
   if (state.refreshing) stopRefreshAnimation();
-  if (!editor.value && actionButton.dataset.mode === "undo") {
+  if (actionButton.dataset.mode === "undo") {
     state.undo = null;
     setMode("optimize");
     return;
@@ -92,15 +135,26 @@ function handleEditorInput() {
   updateControls();
 }
 
-function setEditorValue(value) {
+function setEditorValue(value: string) {
+  state.revision += 1;
   if (state.refreshing) stopRefreshAnimation();
   editor.value = value;
   updateControls();
 }
 
-function applyOptimization(source, response, undoKind) {
+function applyOptimization(
+  source: string,
+  response: OptimizeResponse,
+  undoKind: UndoEntry["kind"],
+  operationId?: number,
+) {
   stopRefreshAnimation();
-  state.undo = { kind: undoKind, text: source };
+  state.undo = {
+    kind: undoKind,
+    text: source,
+    output: response.optimized,
+    operationId,
+  };
   setEditorValue(response.optimized);
   setMode("undo");
   showToast("优化完成", "ready");
@@ -110,23 +164,45 @@ function applyOptimization(source, response, undoKind) {
   editor.scrollTop = editor.scrollHeight;
 }
 
-async function optimizeEditor(overwriteClipboard = false) {
-  const source = editor.value.trim();
-  if (!source || state.busy || state.refreshing) return;
+async function optimizeEditor(clipboardSource?: string) {
+  const previousDraft = editor.value;
+  const source = clipboardSource ?? editor.value;
+  if (!source.trim() || state.busy || state.refreshing) return;
+  if (clipboardSource !== undefined) {
+    state.undo = null;
+    setEditorValue(source);
+    setMode("optimize");
+  }
+  const revision = state.revision;
   state.busy = true;
   updateControls();
   showToast("正在优化…", "neutral", true);
   startRefreshAnimation(source);
   try {
-    const response = await bridge.optimizer.optimize(source);
-    if (overwriteClipboard) await bridge.clipboard.write(response.optimized);
+    const clipboardResult =
+      clipboardSource !== undefined
+        ? await bridge.clipboard.optimize(clipboardSource)
+        : null;
+    const response =
+      clipboardResult?.response ?? (await bridge.optimizer.optimize(source));
+    if (revision !== state.revision) {
+      showToast("编辑内容已变化，未替换当前草稿。", "neutral", true);
+      return;
+    }
     applyOptimization(
-      source,
+      clipboardSource !== undefined && previousDraft ? previousDraft : source,
       response,
-      overwriteClipboard ? "shortcut-clipboard" : "editor",
+      clipboardResult?.clipboardUpdated ? "clipboard" : "editor",
+      clipboardResult?.operationId,
     );
-    if (overwriteClipboard) {
-      showToast("优化完成，已更新剪贴板", "ready");
+    if (clipboardResult) {
+      showToast(
+        clipboardResult.clipboardUpdated
+          ? "优化完成，已更新剪贴板"
+          : "优化完成；剪贴板已有新内容，未覆盖",
+        "ready",
+        !clipboardResult.clipboardUpdated,
+      );
     }
   } catch (error) {
     showToast(errorMessage(error), "error", true);
@@ -140,49 +216,32 @@ async function optimizeEditor(overwriteClipboard = false) {
 async function undoOptimization() {
   if (!state.undo || state.busy) return;
   const previous = state.undo;
+  const revision = state.revision;
+  state.busy = true;
+  updateControls();
   try {
-    if (previous.kind === "clipboard") await bridge.clipboard.undo();
-    if (previous.kind === "shortcut-clipboard") {
-      await bridge.clipboard.write(previous.text);
-    }
+    const result =
+      previous.kind === "clipboard"
+        ? await bridge.clipboard.undo(previous.operationId)
+        : null;
+    if (revision !== state.revision) return;
     state.undo = null;
     setEditorValue(previous.text);
     setMode("optimize");
-    showToast("已撤销", "ready");
+    showToast(
+      result?.conflict ? "已恢复编辑内容；剪贴板已有新内容，未修改" : "已撤销",
+      "ready",
+    );
     editor.focus();
   } catch (error) {
     showToast(errorMessage(error), "error", true);
+  } finally {
+    state.busy = false;
+    updateControls();
   }
 }
 
-function formatShortcut(value, platform = state.platform) {
-  const parts = value.split("+");
-  const key = parts.at(-1) ?? "";
-  if (platform !== "darwin") {
-    return [
-      parts.includes("CommandOrControl") || parts.includes("Control")
-        ? "Ctrl"
-        : null,
-      parts.includes("Alt") ? "Alt" : null,
-      parts.includes("Shift") ? "Shift" : null,
-      key,
-    ]
-      .filter(Boolean)
-      .join("+");
-  }
-  const symbols = [
-    ["Control", "⌃"],
-    ["Alt", "⌥"],
-    ["Shift", "⇧"],
-    ["CommandOrControl", "⌘"],
-  ]
-    .filter(([modifier]) => parts.includes(modifier))
-    .map(([, symbol]) => symbol)
-    .join("");
-  return `${symbols}${key}`;
-}
-
-function renderPinState(alwaysOnTop) {
+function renderPinState(alwaysOnTop: boolean) {
   pinButton.setAttribute("aria-pressed", String(alwaysOnTop));
   const label = alwaysOnTop ? "取消窗口置顶" : "窗口置顶";
   pinButton.setAttribute("aria-label", label);
@@ -190,13 +249,20 @@ function renderPinState(alwaysOnTop) {
   promptBox.classList.toggle("is-pinned", alwaysOnTop);
 }
 
-function renderSettings(snapshot) {
+function renderSettings(snapshot: SettingsSnapshot) {
   state.platform = snapshot.platform;
   state.settings = snapshot.settings;
   launchToggle.checked = snapshot.settings.launchAtLogin;
-  shortcutClipboardToggle.checked = snapshot.settings.optimizeClipboardOnShortcut;
-  shortcutLabel.textContent = formatShortcut(snapshot.settings.shortcut);
-  shortcutRecorder.classList.toggle("shortcut-recorder--error", !snapshot.shortcutRegistered);
+  shortcutClipboardToggle.checked =
+    snapshot.settings.optimizeClipboardOnShortcut;
+  shortcutLabel.textContent = formatShortcut(
+    snapshot.settings.shortcut,
+    state.platform,
+  );
+  shortcutRecorder.classList.toggle(
+    "shortcut-recorder--error",
+    !snapshot.shortcutRegistered,
+  );
   settingsStatus.textContent = snapshot.shortcutError ?? "";
   settingsStatus.dataset.tone = snapshot.shortcutError ? "error" : "neutral";
   renderPinState(snapshot.settings.alwaysOnTop);
@@ -220,12 +286,14 @@ async function toggleAlwaysOnTop() {
 }
 
 function openSettings() {
+  promptBox.inert = true;
   settingsPanel.hidden = false;
   state.settingsOpen = true;
   settingsClose.focus();
 }
 
 function closeSettings() {
+  promptBox.inert = false;
   state.capturingShortcut = false;
   shortcutRecorder.classList.remove("is-recording");
   settingsPanel.hidden = true;
@@ -233,13 +301,13 @@ function closeSettings() {
   editor.focus();
 }
 
-function shortcutFromEvent(event) {
-  const primaryPressed = state.platform === "darwin"
-    ? event.metaKey
-    : event.ctrlKey;
-  const additionalPressed = state.platform === "darwin"
-    ? event.altKey || event.ctrlKey || event.shiftKey
-    : event.altKey || event.shiftKey;
+function shortcutFromEvent(event: KeyboardEvent) {
+  const primaryPressed =
+    state.platform === "darwin" ? event.metaKey : event.ctrlKey;
+  const additionalPressed =
+    state.platform === "darwin"
+      ? event.altKey || event.ctrlKey || event.shiftKey
+      : event.altKey || event.shiftKey;
   if (!primaryPressed || !additionalPressed) {
     throw new Error(
       state.platform === "darwin"
@@ -263,7 +331,7 @@ function shortcutFromEvent(event) {
     .join("+");
 }
 
-async function captureShortcut(event) {
+async function captureShortcut(event: KeyboardEvent) {
   event.preventDefault();
   event.stopPropagation();
   if (event.key === "Escape") {
@@ -277,8 +345,11 @@ async function captureShortcut(event) {
     const candidate = shortcutFromEvent(event);
     const snapshot = await bridge.settings.update({ shortcut: candidate });
     renderSettings(snapshot);
-    if (snapshot.settings.shortcut === candidate && snapshot.shortcutRegistered) {
-      settingsStatus.textContent = `已更新为 ${formatShortcut(candidate)}`;
+    if (
+      snapshot.settings.shortcut === candidate &&
+      snapshot.shortcutRegistered
+    ) {
+      settingsStatus.textContent = `已更新为 ${formatShortcut(candidate, state.platform)}`;
       settingsStatus.dataset.tone = "ready";
       state.capturingShortcut = false;
       shortcutRecorder.classList.remove("is-recording");
@@ -335,6 +406,23 @@ shortcutClipboardToggle.addEventListener("change", async () => {
 });
 
 window.addEventListener("keydown", (event) => {
+  if (state.settingsOpen && event.key === "Tab") {
+    const controls = [
+      ...settingsPanel.querySelectorAll<HTMLElement>(
+        "button:not(:disabled), input:not(:disabled)",
+      ),
+    ];
+    const first = controls[0];
+    const last = controls.at(-1);
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last?.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first?.focus();
+    }
+    return;
+  }
   if (state.capturingShortcut) {
     void captureShortcut(event);
     return;
@@ -342,7 +430,12 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     event.preventDefault();
     if (state.settingsOpen) closeSettings();
-    else void bridge.window.hide();
+    else
+      void bridge.window
+        .hide()
+        .catch((error: unknown) =>
+          showToast(errorMessage(error), "error", true),
+        );
     return;
   }
   if (
@@ -367,23 +460,15 @@ async function boot() {
   }
 
   updateControls();
-  try {
-    renderSettings(await bridge.settings.get());
-  } catch (error) {
-    showToast(errorMessage(error), "error", true);
-  }
-
-  void bridge.optimizer.health().then((health) => {
-    if (!health.authenticated) {
-      showToast("首次优化时会打开 Trae 登录", "neutral", true);
-    } else if (!health.ok) {
-      showToast("Trae 优化接口暂时不可用。", "error", true);
-    }
-  });
 
   bridge.window.onBlankRequested(() => {
+    if (state.busy) {
+      showToast("正在优化，请稍候再新建草稿。", "neutral", true);
+      return;
+    }
+    if (state.settingsOpen) closeSettings();
     if (editor.value) {
-      state.undo = { kind: "editor", text: editor.value };
+      state.undo = { kind: "draft", text: editor.value };
       setMode("undo");
     } else {
       state.undo = null;
@@ -394,17 +479,26 @@ async function boot() {
     editor.focus();
   });
   bridge.window.onFocusEditor(() => {
+    if (state.settingsOpen) {
+      settingsClose.focus();
+      return;
+    }
     editor.focus();
     const end = editor.value.length;
     editor.setSelectionRange(end, end);
   });
-  bridge.window.onClipboardOptimized((result) => {
-    applyOptimization(result.source, result.response, "clipboard");
-  });
   bridge.window.onClipboardRestored((result) => {
-    if (!result?.restored) return;
+    if (
+      !result?.restored ||
+      state.busy ||
+      state.undo?.kind !== "clipboard" ||
+      state.undo.operationId !== result.operationId ||
+      editor.value !== state.undo.output
+    )
+      return;
+    const previous = state.undo.text;
     state.undo = null;
-    setEditorValue(result.text ?? "");
+    setEditorValue(previous);
     setMode("optimize");
     showToast("已撤销", "ready");
   });
@@ -416,19 +510,48 @@ async function boot() {
       return;
     }
     if (state.settingsOpen) closeSettings();
-    state.undo = null;
-    setMode("optimize");
-    setEditorValue(input);
     status.hidden = true;
     editor.focus();
-    void optimizeEditor(true);
+    void optimizeEditor(input);
   });
   bridge.window.onAuthStatus((value) => {
     if (!value?.message) return;
-    showToast(value.message, value.tone ?? "neutral", value.persistent ?? false);
+    showToast(
+      value.message,
+      value.tone ?? "neutral",
+      value.persistent ?? false,
+    );
   });
-  bridge.window.onOperationError((message) => showToast(message, "error", true));
+  bridge.window.onOperationError((message) =>
+    showToast(message, "error", true),
+  );
+  try {
+    renderSettings(await bridge.settings.get());
+  } catch (error) {
+    showToast(errorMessage(error), "error", true);
+  }
+  const initialRevision = state.revision;
+  void bridge.optimizer
+    .health()
+    .then((health) => {
+      if (state.busy || state.revision !== initialRevision) return;
+      if (!health.ok)
+        showToast(health.error ?? "Trae 优化接口暂时不可用。", "error", true);
+    })
+    .catch((error: unknown) => {
+      if (!state.busy && state.revision === initialRevision)
+        showToast(errorMessage(error), "error", true);
+    });
   editor.focus();
 }
 
-void boot();
+status.addEventListener("click", () => status.classList.toggle("is-expanded"));
+status.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    status.classList.toggle("is-expanded");
+  }
+});
+void boot().catch((error: unknown) =>
+  showToast(errorMessage(error), "error", true),
+);

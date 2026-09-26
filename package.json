@@ -1,6 +1,6 @@
 {
   "name": "prompt-refiner-mvp",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "驻留在 macOS 菜单栏或 Windows 系统托盘的 Trae 提示词优化器",
   "author": "精炼台",
   "private": true,
@@ -14,22 +14,29 @@
     "postinstall": "install-electron",
     "prebuild": "pnpm clean",
     "dev": "pnpm build && electron .",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/bundle.mjs",
     "start": "electron .",
     "icons": "bash scripts/build-icons.sh",
-    "pack:mac": "pnpm build && pnpm icons && electron-builder --mac zip --arm64 && bash scripts/verify-mac-distribution.sh",
-    "pack:win": "pnpm build && electron-builder --win nsis --x64",
+    "pack:mac": "pnpm build && pnpm icons && electron-builder --mac zip --arm64 --publish never && bash scripts/verify-mac-distribution.sh",
+    "pack:win": "pnpm build && electron-builder --win nsis --x64 --publish never",
+    "typecheck": "tsc --noEmit",
+    "format:check": "prettier --check src desktop tests scripts/*.mjs package.json",
+    "smoke:electron": "pnpm build && electron scripts/smoke-electron.mjs",
     "test": "vitest run --dir tests",
     "test:watch": "vitest --dir tests"
   },
   "devDependencies": {
     "@tabler/icons": "3.46.0",
-    "@types/node": "^24.10.0",
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^24.13.3",
     "electron": "43.4.0",
     "electron-builder": "26.15.3",
-    "tsx": "^4.20.6",
+    "esbuild": "0.28.2",
+    "jsdom": "30.1.1",
+    "prettier": "^3.9.9",
+    "tsx": "^4.23.12",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.8"
+    "vitest": "^4.1.11"
   },
   "packageManager": "pnpm@9.15.0",
   "build": {
@@ -42,8 +49,8 @@
     "files": [
       "dist/src/**/*",
       "dist/desktop/**/*",
-      "desktop/preload.cjs",
       "desktop/renderer/**/*",
+      "!desktop/renderer/**/*.ts",
       "prompts/trae-cn-input-optimization.md",
       "assets/app-icon.icns",
       "package.json"

@@ -24,10 +24,38 @@ export function isTraeWebsiteUrl(value: string): boolean {
     const url = new URL(value);
     return (
       url.protocol === "https:" &&
-      (url.hostname === "trae.cn" ||
-        url.hostname.endsWith(".trae.cn") ||
-        url.hostname === "trae.com.cn" ||
-        url.hostname.endsWith(".trae.com.cn"))
+      !url.username &&
+      !url.password &&
+      !url.port &&
+      [
+        "trae.cn",
+        "www.trae.cn",
+        "api.trae.cn",
+        "trae.com.cn",
+        "www.trae.com.cn",
+        "api.trae.com.cn",
+      ].includes(url.hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Navigation only, not token access. Do not trust arbitrary subdomains or HTTPS sites. */
+export function isAllowedLoginUrl(value: string): boolean {
+  if (isTraeWebsiteUrl(value)) return true;
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
+      !url.port &&
+      [
+        "open.weixin.qq.com",
+        "passport.feishu.cn",
+        "accounts.feishu.cn",
+      ].includes(url.hostname)
     );
   } catch {
     return false;

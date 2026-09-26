@@ -34,36 +34,38 @@ describe("Trae direct transport", () => {
   });
 
   it("builds Trae's multimodal message request without exposing the token", async () => {
-    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body));
-      expect(body).toMatchObject({
-        function: "chat",
-        usage: "input_optimization",
-        model: "no_thinking_model",
-      });
-      expect(body.messages[0]).toEqual({
-        role: "system",
-        content: [{ type: "text", text: "system" }],
-      });
-      expect(body.messages[1]).toEqual({
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: '{"user_input":"input","placeholder_map":"{}"}',
-          },
-        ],
-      });
-      const headers = new Headers(init?.headers);
-      expect(headers.get("x-ide-token")).toBe("secret-token");
-      expect(headers.get("x-ide-version")).toBe("3.3.88");
-      expect(headers.get("x-ide-version-code")).toBe("20260212");
-      expect(headers.get("x-app-version-code")).toBe("20260212");
-      return new Response(successSse, {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      });
-    });
+    const fetchMock = vi.fn(
+      async (_url: string | URL | Request, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body));
+        expect(body).toMatchObject({
+          function: "chat",
+          usage: "input_optimization",
+          model: "no_thinking_model",
+        });
+        expect(body.messages[0]).toEqual({
+          role: "system",
+          content: [{ type: "text", text: "system" }],
+        });
+        expect(body.messages[1]).toEqual({
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: '{"user_input":"input","placeholder_map":"{}"}',
+            },
+          ],
+        });
+        const headers = new Headers(init?.headers);
+        expect(headers.get("x-ide-token")).toBe("secret-token");
+        expect(headers.get("x-ide-version")).toBe("3.3.88");
+        expect(headers.get("x-ide-version-code")).toBe("20260212");
+        expect(headers.get("x-app-version-code")).toBe("20260212");
+        return new Response(successSse, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      },
+    );
 
     const result = await optimizeWithTrae(
       "secret-token",

@@ -25,7 +25,10 @@ describe("Windows desktop support", () => {
   it("keeps Windows shortcuts and startup behavior platform-aware", async () => {
     const [main, renderer, auth] = await Promise.all([
       readFile(path.join(PROJECT_ROOT, "desktop", "main.ts"), "utf8"),
-      readFile(path.join(PROJECT_ROOT, "desktop", "renderer", "app.js"), "utf8"),
+      readFile(
+        path.join(PROJECT_ROOT, "desktop", "renderer", "app.ts"),
+        "utf8",
+      ),
       readFile(path.join(PROJECT_ROOT, "desktop", "trae-web-auth.ts"), "utf8"),
     ]);
     expect(main).toContain('app.setAppUserModelId("com.local.prompt-refiner")');

@@ -1,10 +1,16 @@
 import { BrowserWindow, safeStorage, session } from "electron";
 import type { Session } from "electron";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { checkTraeBackend } from "../src/trae-client.js";
+import { readFile, unlink } from "node:fs/promises";
+import {
+  checkTraeBackend,
+  TraeApiError,
+  type BackendStatus,
+} from "../src/trae-client.js";
+import { readBoundedBody, withNetworkTimeout } from "../src/network.js";
+import { atomicWrite, createSerialQueue } from "./storage.js";
 import {
   isTraeWebsiteUrl,
+  isAllowedLoginUrl,
   parseTraeWebTokenResponse,
   TRAE_WEB_LOGIN_URL,
   TRAE_WEB_TOKEN_STORAGE_KEY,
@@ -26,12 +32,19 @@ type TraeWebAuthOptions = {
   onLoginFinished(authenticated: boolean): void;
   devTools: boolean;
   tokenPath: string;
-  validateToken?(token: string): Promise<boolean>;
+  validateToken?(token: string): Promise<BackendStatus>;
 };
 
 export class TraeWebAuth {
   private readonly authSession: Session;
-  private readonly validateToken: (token: string) => Promise<boolean>;
+  private readonly validateToken: (token: string) => Promise<BackendStatus>;
+  private recoveryTask: Promise<string | null> | null = null;
+  private readonly storageQueue = createSerialQueue();
+  private validation: {
+    token: string;
+    expires: number;
+    task: Promise<BackendStatus>;
+  } | null = null;
   private cachedToken: string | null = null;
   private storedTokenChecked = false;
   private loginTask: Promise<string> | null = null;
@@ -40,16 +53,22 @@ export class TraeWebAuth {
   constructor(private readonly options: TraeWebAuthOptions) {
     this.authSession = session.fromPartition(AUTH_PARTITION, { cache: true });
     this.validateToken = options.validateToken ?? checkTraeBackend;
+    this.authSession.setPermissionRequestHandler(
+      (_contents, _permission, callback) => callback(false),
+    );
+    this.authSession.setPermissionCheckHandler(() => false);
   }
 
   get authenticated(): boolean {
     return this.cachedToken !== null;
   }
 
-  invalidate(): void {
+  async invalidate(): Promise<void> {
+    await this.recoveryTask?.catch(() => undefined);
     this.cachedToken = null;
     this.storedTokenChecked = true;
-    void this.clearStoredToken();
+    this.validation = null;
+    await this.clearStoredToken();
   }
 
   async warmup(): Promise<boolean> {
@@ -61,41 +80,74 @@ export class TraeWebAuth {
   }
 
   async getToken(interactive: boolean): Promise<string> {
+    if (this.loginTask) return this.loginTask;
     if (this.cachedToken) return this.cachedToken;
-
-    if (!this.storedTokenChecked) {
-      this.storedTokenChecked = true;
-      const storedToken = await this.readStoredToken();
-      if (storedToken && (await this.validateToken(storedToken))) {
-        this.cachedToken = storedToken;
-        return storedToken;
-      }
-      await this.clearStoredToken();
+    if (!this.recoveryTask) {
+      this.recoveryTask = this.recoverToken().finally(() => {
+        this.recoveryTask = null;
+      });
     }
-
-    const sessionToken = await this.readSessionToken();
-    if (sessionToken && (await this.validateToken(sessionToken))) {
-      this.cachedToken = sessionToken;
-      return sessionToken;
-    }
+    const recovered = await this.recoveryTask;
+    if (recovered) return recovered;
     if (!interactive) throw new TraeLoginRequiredError();
     return this.login(false);
   }
 
-  async login(force = false): Promise<string> {
-    if (this.loginTask) return this.loginTask;
-    if (force) {
-      this.cachedToken = null;
+  /** Single-flight, short-lived status cache; never memoize transport failures. */
+  checkToken(token: string): Promise<BackendStatus> {
+    if (
+      this.validation?.token === token &&
+      this.validation.expires > Date.now()
+    )
+      return this.validation.task;
+    const entry = {
+      token,
+      expires: Date.now() + 30_000,
+      task: this.validateToken(token),
+    };
+    this.validation = entry;
+    void entry.task.catch(() => {
+      if (this.validation === entry) this.validation = null;
+    });
+    return entry.task;
+  }
+
+  private async recoverToken(): Promise<string | null> {
+    if (!this.storedTokenChecked) {
+      const storedToken = await this.readStoredToken();
+      if (storedToken && (await this.checkToken(storedToken)) !== "expired") {
+        this.storedTokenChecked = true;
+        this.cachedToken = storedToken;
+        return storedToken;
+      }
+      if (storedToken) await this.clearStoredToken();
       this.storedTokenChecked = true;
-      await this.clearStoredToken();
-      await this.authSession.clearStorageData({
-        storages: ["cookies", "localstorage"],
-      });
-    } else if (this.cachedToken) {
-      return this.cachedToken;
     }
 
-    this.loginTask = this.runLogin();
+    const sessionToken = await this.readSessionToken();
+    if (sessionToken && (await this.checkToken(sessionToken)) !== "expired") {
+      await this.storeToken(sessionToken);
+      this.cachedToken = sessionToken;
+      return sessionToken;
+    }
+    return null;
+  }
+
+  async login(force = false): Promise<string> {
+    if (this.loginTask) return this.loginTask;
+    if (!force && this.cachedToken) {
+      return this.cachedToken;
+    }
+    this.loginTask = (async () => {
+      await this.recoveryTask?.catch(() => undefined);
+      if (force) {
+        await this.invalidate();
+        await this.authSession.clearStorageData({
+          storages: ["cookies", "localstorage"],
+        });
+      }
+      return this.runLogin();
+    })();
     try {
       return await this.loginTask;
     } finally {
@@ -104,22 +156,56 @@ export class TraeWebAuth {
   }
 
   private async readSessionToken(): Promise<string | null> {
-    let response: Response;
-    try {
-      response = await this.authSession.fetch(TRAE_WEB_TOKEN_URL, {
+    return withNetworkTimeout(10_000, async (signal) => {
+      const response = await this.authSession.fetch(TRAE_WEB_TOKEN_URL, {
         method: "POST",
+        redirect: "error",
+        signal,
         credentials: "include",
         headers: {
           accept: "application/json",
           "content-type": "application/json",
         },
       });
-    } catch {
-      return null;
-    }
-    if (response.status === 401 || response.status === 403) return null;
-    if (!response.ok) return null;
-    return parseTraeWebTokenResponse(await response.json().catch(() => null));
+      if (response.status === 401) return null;
+      if (!response.ok)
+        throw new TraeApiError(
+          "Trae 登录服务暂时不可用，请稍后重试。",
+          "unavailable",
+        );
+      const body = await readBoundedBody(response, signal, 64_000);
+      let data: unknown;
+      try {
+        data = JSON.parse(body);
+      } catch {
+        throw new TraeApiError("Trae 登录服务响应格式错误。", "protocol");
+      }
+      const token = parseTraeWebTokenResponse(data);
+      if (token) return token;
+      // Only a recognized missing session permits interactive login, not malformed/5xx data.
+      if (
+        typeof data === "object" &&
+        data !== null &&
+        "ResponseMetadata" in data
+      ) {
+        const metadata = data.ResponseMetadata as {
+          Error?: { Code?: string };
+        } | null;
+        if (
+          [
+            "Unauthorized",
+            "InvalidSession",
+            "NotLogin",
+            "InvalidToken",
+          ].includes(metadata?.Error?.Code ?? "")
+        )
+          return null;
+      }
+      throw new TraeApiError(
+        "Trae 登录服务未返回有效凭据，请稍后重试。",
+        "protocol",
+      );
+    });
   }
 
   private async readStoredToken(): Promise<string | null> {
@@ -139,22 +225,25 @@ export class TraeWebAuth {
     if (!safeStorage.isEncryptionAvailable()) {
       throw new Error("系统无法安全保存 Trae 登录状态。");
     }
-    await mkdir(path.dirname(this.options.tokenPath), { recursive: true });
-    const temporaryPath = `${this.options.tokenPath}.${process.pid}.tmp`;
     const encrypted = safeStorage.encryptString(token).toString("base64");
-    await writeFile(temporaryPath, `${encrypted}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-    await rename(temporaryPath, this.options.tokenPath);
+    await this.storageQueue(() =>
+      atomicWrite(this.options.tokenPath, `${encrypted}\n`),
+    );
   }
 
   private async clearStoredToken(): Promise<void> {
-    await unlink(this.options.tokenPath).catch(() => undefined);
+    await this.storageQueue(() =>
+      unlink(this.options.tokenPath).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+      }),
+    );
   }
 
   private async readWindowToken(window: BrowserWindow): Promise<string | null> {
-    if (window.isDestroyed() || !isTraeWebsiteUrl(window.webContents.getURL())) {
+    if (
+      window.isDestroyed() ||
+      !isTraeWebsiteUrl(window.webContents.getURL())
+    ) {
       return null;
     }
     const value: unknown = await window.webContents.executeJavaScript(
@@ -165,7 +254,10 @@ export class TraeWebAuth {
   }
 
   private async clearWindowToken(window: BrowserWindow): Promise<void> {
-    if (window.isDestroyed() || !isTraeWebsiteUrl(window.webContents.getURL())) {
+    if (
+      window.isDestroyed() ||
+      !isTraeWebsiteUrl(window.webContents.getURL())
+    ) {
       return;
     }
     await window.webContents
@@ -201,6 +293,8 @@ export class TraeWebAuth {
     return new Promise<string>((resolve, reject) => {
       let settled = false;
       let checking = false;
+      let retryAfter = 0;
+      let failures = 0;
       const cookieListener = () => void probe();
       const poll = setInterval(() => void probe(), LOGIN_POLL_MS);
 
@@ -239,15 +333,28 @@ export class TraeWebAuth {
       };
 
       const probe = async () => {
-        if (settled || checking || window.isDestroyed()) return;
+        if (
+          settled ||
+          checking ||
+          Date.now() < retryAfter ||
+          window.isDestroyed()
+        )
+          return;
         checking = true;
         try {
           const token =
             (await this.readWindowToken(window).catch(() => null)) ??
             (await this.readSessionToken());
-          if (token && (await this.validateToken(token))) {
+          if (token && (await this.checkToken(token)) !== "expired") {
             await finish(token);
           }
+          failures = 0;
+        } catch {
+          // Keep the login window alive on transient service failures. No unhandled promise.
+          failures += 1;
+          retryAfter =
+            Date.now() +
+            Math.min(15_000, LOGIN_POLL_MS * 2 ** Math.min(failures, 4));
         } finally {
           checking = false;
         }
@@ -262,23 +369,35 @@ export class TraeWebAuth {
       window.webContents.on("did-navigate", () => void probe());
       window.webContents.on("did-redirect-navigation", () => void probe());
       window.webContents.on("will-navigate", (event, url) => {
-        if (!url.startsWith("https://")) event.preventDefault();
+        if (!isAllowedLoginUrl(url)) event.preventDefault();
       });
+      window.webContents.on("will-redirect", (event, url) => {
+        if (!isAllowedLoginUrl(url)) event.preventDefault();
+      });
+      const loadLoginUrl = (url: string) => {
+        void window.loadURL(url).catch((error: unknown) => {
+          // Chromium cancels superseded navigations with ERR_ABORTED; the new load may succeed.
+          const code = (error as { code?: string; errno?: number })?.code;
+          if (
+            code === "ERR_ABORTED" ||
+            (error as { errno?: number })?.errno === -3 ||
+            (error instanceof Error && /ERR_ABORTED/.test(error.message))
+          ) {
+            void probe();
+            if (!window.isDestroyed()) window.show();
+            return;
+          }
+          void finish(
+            null,
+            new Error("无法打开 Trae 登录页，请检查网络后重试。"),
+          );
+        });
+      };
       window.webContents.setWindowOpenHandler(({ url }) => {
-        if (url.startsWith("https://")) void window.loadURL(url);
+        if (isAllowedLoginUrl(url)) loadLoginUrl(url);
         return { action: "deny" };
       });
-
-      void window.loadURL(TRAE_WEB_LOGIN_URL).catch((error: unknown) => {
-        void finish(
-          null,
-          new Error(
-            error instanceof Error
-              ? `无法打开 Trae 登录页：${error.message}`
-              : "无法打开 Trae 登录页。",
-          ),
-        );
-      });
+      loadLoginUrl(TRAE_WEB_LOGIN_URL);
     });
   }
 }
