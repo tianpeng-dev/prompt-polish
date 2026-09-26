@@ -1,6 +1,8 @@
-# JingLianTai · 精炼台
+# PromptPolish
 
-JingLianTai（精炼台）是一款轻量的 macOS 菜单栏与 Windows 系统托盘提示词优化工具。输入一句自然语言需求，点击闪光图标即可调用 Trae 的提示词优化能力，结果会直接替换原文；再次点击同一位置即可撤销。
+PromptPolish 是一款轻量的 macOS 菜单栏与 Windows 系统托盘提示词优化工具。输入一句自然语言需求，点击闪光图标即可调用 Trae 的提示词优化能力，结果会直接替换原文；再次点击同一位置即可撤销。
+
+项目原名“精炼台”。现有 v1.3.3 安装包仍沿用“精炼台”应用名称及 `JingLianTai-*` 文件名，登录凭据、设置与应用标识保持兼容。
 
 应用不需要安装或运行 TraeCode。首次优化时会在应用内打开 Trae 官方登录页面，登录成功后即可独立使用。
 
@@ -28,7 +30,7 @@ JingLianTai（精炼台）是一款轻量的 macOS 菜单栏与 Windows 系统�
 
 ## 下载安装
 
-从 [Releases](https://github.com/tianpeng-dev/jingliantai/releases/latest) 下载对应平台的安装包。
+从 [Releases](https://github.com/tianpeng-dev/prompt-polish/releases/latest) 下载对应平台的安装包。
 
 ### macOS
 
