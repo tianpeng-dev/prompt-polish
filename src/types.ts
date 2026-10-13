@@ -1,7 +1,7 @@
 export type OptimizeMetrics = {
   inputChars: number;
   outputChars: number;
-  expansionRatio: number;
+  expansionRatio: number | null;
   durationMs: number;
   tokenUsage: number | null;
 };

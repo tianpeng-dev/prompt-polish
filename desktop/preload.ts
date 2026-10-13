@@ -20,7 +20,15 @@ const bridge: DesktopBridge = {
     health: () => ipcRenderer.invoke(channels.optimizerHealth),
     optimize: (input) => ipcRenderer.invoke(channels.optimizerOptimize, input),
   },
+  thinking: {
+    copy: (input, methodId) =>
+      ipcRenderer.invoke(channels.thinkingCopy, input, methodId),
+  },
+  auth: {
+    login: () => ipcRenderer.invoke(channels.authLogin),
+  },
   clipboard: {
+    copy: (text) => ipcRenderer.invoke(channels.clipboardCopy, text),
     optimize: (expectedSource) =>
       ipcRenderer.invoke(channels.clipboardOptimize, expectedSource),
     undo: (operationId) =>
@@ -32,6 +40,8 @@ const bridge: DesktopBridge = {
   },
   window: {
     hide: () => ipcRenderer.invoke(channels.windowHide),
+    setView: (view) => ipcRenderer.invoke(channels.windowSetView, view),
+    onLayoutChanged: (callback) => subscribe(events.layoutChanged, callback),
     onBlankRequested: (callback) => subscribe(events.blankRequested, callback),
     onFocusEditor: (callback) => subscribe(events.focusEditor, callback),
     onClipboardRestored: (callback) =>

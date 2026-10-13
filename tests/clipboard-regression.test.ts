@@ -13,6 +13,62 @@ const result = (text: string): OptimizeResponse => ({
   traceId: "synthetic",
 });
 describe("clipboard ownership", () => {
+  it("copies explicit method prompts and conditionally restores the previous clipboard", () => {
+    let text = "复制前的内容";
+    const controller = createClipboardController({
+      clipboard: {
+        readText: () => text,
+        writeText: (value) => {
+          text = value;
+        },
+      },
+      optimize: vi.fn(),
+    });
+    const first = controller.copy("方法提示词");
+    expect(controller.copy("方法提示词")).toEqual(first);
+    expect(text).toBe("方法提示词");
+    expect(controller.canUndo()).toBe(true);
+    text = "后来复制的内容";
+    expect(controller.undo(first.operationId)).toMatchObject({
+      restored: false,
+      conflict: true,
+    });
+    expect(text).toBe("后来复制的内容");
+    const next = controller.copy("另一种方法");
+    expect(controller.undo(first.operationId)).toMatchObject({
+      conflict: true,
+    });
+    expect(controller.undo(next.operationId)).toMatchObject({
+      restored: true,
+      text: "后来复制的内容",
+    });
+    expect(text).toBe("后来复制的内容");
+    expect(controller.canUndo()).toBe(false);
+  });
+
+  it("preserves clipboard and undo ownership on failed copy or invalid payload", () => {
+    let text = "原剪贴板";
+    let fail = false;
+    const controller = createClipboardController({
+      clipboard: {
+        readText: () => text,
+        writeText: (value) => {
+          if (fail) throw new Error("明确标识的剪贴板写入故障");
+          text = value;
+        },
+      },
+      optimize: vi.fn(),
+    });
+    const first = controller.copy("第一次复制");
+    for (const value of [null, {}, "", "x".repeat(10001)])
+      expect(() => controller.copy(value)).toThrow("复制内容无效");
+    fail = true;
+    expect(() => controller.copy("第二次复制")).toThrow("剪贴板写入故障");
+    expect(text).toBe("第一次复制");
+    fail = false;
+    expect(controller.undo(first.operationId).restored).toBe(true);
+    expect(text).toBe("原剪贴板");
+  });
   it("does not overwrite a newer copy while awaiting the backend", async () => {
     let text = "  source  ";
     let resolve!: (response: OptimizeResponse) => void;
@@ -27,6 +83,7 @@ describe("clipboard ownership", () => {
         }),
     });
     const pending = controller.optimize(text);
+    expect(() => controller.copy("同时复制")).toThrow("正在处理");
     await expect(controller.optimize()).rejects.toThrow("正在处理");
     text = "new copy";
     resolve(result("output"));

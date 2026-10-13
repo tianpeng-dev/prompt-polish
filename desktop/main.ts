@@ -20,6 +20,14 @@ import { getTraeHealth } from "../src/trae-health.js";
 import { TraeApiError } from "../src/trae-client.js";
 import type { OptimizeResponse } from "../src/types.js";
 import { validateInput } from "../src/validation.js";
+import { generateThinkingPrompt } from "../src/thinking-methods.js";
+import {
+  calculateViewBounds,
+  compactAnchor,
+  validateWindowView,
+  type WindowLayout,
+  type WindowView,
+} from "./window-layout.js";
 import {
   calculateWindowPosition,
   constrainWindowPosition,
@@ -67,6 +75,11 @@ let optimizePrompt:
 let clipboardController: ReturnType<typeof createClipboardController> | null =
   null;
 let traeAuth: TraeWebAuth | null = null;
+let windowLayout: WindowLayout = {
+  view: "editor",
+  side: "below",
+  height: WINDOW_SIZE.height,
+};
 const settingsQueue = createSerialQueue();
 
 function userMessage(error: unknown): string {
@@ -169,6 +182,39 @@ function resolvedWindowPosition(): { x: number; y: number } {
   return constrainedPosition({ ...settings.windowPosition, ...WINDOW_SIZE });
 }
 
+function applyWindowView(
+  view: WindowView,
+  anchor?: { x: number; y: number },
+): WindowLayout {
+  const window = mainWindow;
+  if (!window || window.isDestroyed())
+    throw new Error("应用窗口尚未准备完成。");
+  const editorAnchor =
+    anchor ?? compactAnchor(window.getBounds(), windowLayout.side);
+  const display = selectDisplayForBounds(
+    { ...editorAnchor, ...WINDOW_SIZE },
+    screen.getAllDisplays().map(({ id, workArea }) => ({ id, workArea })),
+    screen.getPrimaryDisplay().id,
+  );
+  if (!display) throw new Error("无法确定可用显示器。");
+  const bounds = calculateViewBounds(editorAnchor, display.workArea, view);
+  windowLayout = { view, side: bounds.side, height: bounds.height };
+  programmaticPosition = { x: bounds.x, y: bounds.y };
+  if (moveSettledTimer !== null) clearTimeout(moveSettledTimer);
+  moveSettledTimer = null;
+  if (programmaticMoveTimer !== null) clearTimeout(programmaticMoveTimer);
+  window.setBounds(
+    { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height },
+    false,
+  );
+  programmaticMoveTimer = setTimeout(() => {
+    programmaticPosition = null;
+    programmaticMoveTimer = null;
+  }, 250);
+  sendRendererEvent(RENDERER_EVENTS.layoutChanged, windowLayout);
+  return { ...windowLayout };
+}
+
 async function persistWindowPosition(position: { x: number; y: number }) {
   return settingsQueue(async () => {
     const normalized = { x: Math.round(position.x), y: Math.round(position.y) };
@@ -208,7 +254,9 @@ async function settleWindowPosition(): Promise<void> {
   if (position.x !== bounds.x || position.y !== bounds.y) {
     setMainWindowPosition(position);
   }
-  await persistWindowPosition(position);
+  await persistWindowPosition(
+    compactAnchor({ ...bounds, ...position }, windowLayout.side),
+  );
 }
 
 function scheduleWindowSettle(): void {
@@ -241,18 +289,13 @@ function handleWindowMove(): void {
 function ensureSavedWindowIsVisible(): void {
   const window = mainWindow;
   if (!window || window.isDestroyed() || !settings.windowPosition) return;
-  const position = constrainedPosition({
-    ...settings.windowPosition,
-    ...WINDOW_SIZE,
-  });
-  setMainWindowPosition(position);
-  void persistWindowPosition(position);
+  applyWindowView(windowLayout.view, resolvedWindowPosition());
 }
 
 function showWindow(blank = false): void {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const position = resolvedWindowPosition();
-  setMainWindowPosition(position);
+  applyWindowView(windowLayout.view, position);
   if (settings.windowPosition) void persistWindowPosition(position);
   mainWindow.show();
   mainWindow.focus();
@@ -424,7 +467,7 @@ function undoClipboard(operationId?: number) {
   if (!clipboardController) return { restored: false };
   const result = clipboardController.undo(operationId);
   rebuildTrayMenu();
-  if (result.restored) notify("精炼台", "已恢复优化前的剪贴板内容。");
+  if (result.restored) notify("精炼台", "已恢复上次替换前的剪贴板内容。");
   return result;
 }
 
@@ -442,7 +485,7 @@ function optimizeClipboardFromTray(): void {
 function rebuildTrayMenu(): void {
   if (!tray) return;
   const template: MenuItemConstructorOptions[] = [
-    { label: "打开精炼台", click: () => showWindow() },
+    { label: "打开 PromptPolish", click: () => showWindow() },
     { label: "优化剪贴板", click: optimizeClipboardFromTray },
     {
       label: "撤销上次剪贴板替换",
@@ -480,7 +523,7 @@ function rebuildTrayMenu(): void {
     },
     { type: "separator" },
     {
-      label: "退出精炼台",
+      label: "退出 PromptPolish",
       click: () => {
         quitting = true;
         app.quit();
@@ -552,7 +595,7 @@ async function createWindow(): Promise<void> {
 function createTray(): void {
   const image = trayImage();
   tray = new Tray(image);
-  tray.setToolTip("精炼台");
+  tray.setToolTip("PromptPolish");
   tray.on("click", toggleWindow);
   tray.on("right-click", () => {
     if (trayMenu) tray?.popUpContextMenu(trayMenu);
@@ -585,6 +628,44 @@ function setupIpc(): void {
       throw new Error(userMessage(error));
     }
   });
+  handle(
+    IPC_CHANNELS.thinkingCopy,
+    (_event, input: unknown, methodId: unknown) => {
+      const response = generateThinkingPrompt(input, methodId);
+      if (!clipboardController) throw new Error("应用尚未准备完成。");
+      const { operationId } = clipboardController.copy(response.optimized);
+      rebuildTrayMenu();
+      return { response, operationId, methodId };
+    },
+  );
+  handle(IPC_CHANNELS.authLogin, async () => {
+    if (!traeAuth) throw new Error("登录服务尚未准备完成。");
+    try {
+      await runExclusive(async () => {
+        let token = await traeAuth!.getToken(true);
+        if ((await traeAuth!.checkToken(token)) === "expired") {
+          await traeAuth!.invalidate();
+          token = await traeAuth!.getToken(true);
+        }
+        return token;
+      });
+      rebuildTrayMenu();
+      return getTraeHealth(
+        () => traeAuth!.getToken(false),
+        (token) => traeAuth!.checkToken(token),
+      );
+    } catch (error) {
+      throw new Error(userMessage(error));
+    }
+  });
+  handle(IPC_CHANNELS.clipboardCopy, (_event, text: unknown) => {
+    if (typeof text !== "string" || !text.trim() || text.length > 10_000)
+      throw new TypeError("复制内容无效。");
+    if (!clipboardController) throw new Error("应用尚未准备完成。");
+    const result = clipboardController.copy(text);
+    rebuildTrayMenu();
+    return result;
+  });
   handle(IPC_CHANNELS.clipboardOptimize, (_event, input: unknown) => {
     validateInput(input);
     return optimizeClipboardWithFeedback(input as string);
@@ -605,6 +686,9 @@ function setupIpc(): void {
     return updateSettings(validateSettingsUpdate(value));
   });
   handle(IPC_CHANNELS.windowHide, () => mainWindow?.hide());
+  handle(IPC_CHANNELS.windowSetView, (_event, view: unknown) =>
+    applyWindowView(validateWindowView(view)),
+  );
 }
 
 async function initialize(): Promise<void> {
@@ -621,16 +705,24 @@ async function initialize(): Promise<void> {
     tokenPath: path.join(app.getPath("userData"), TRAE_TOKEN_FILE),
     onLoginStarted: () => {
       sendRendererEvent(RENDERER_EVENTS.authStatus, {
-        message: "请在 Trae 窗口完成登录",
+        message: "正在打开 Trae 官方登录页…",
         tone: "neutral",
         persistent: true,
       });
     },
+    onLoginProgress: (message, tone = "neutral") =>
+      sendRendererEvent(RENDERER_EVENTS.authStatus, {
+        message,
+        tone,
+        persistent: true,
+      }),
     onLoginFinished: (authenticated) => {
       rebuildTrayMenu();
       showWindow();
       sendRendererEvent(RENDERER_EVENTS.authStatus, {
-        message: authenticated ? "登录成功，继续优化…" : "Trae 登录已取消",
+        message: authenticated
+          ? "Trae 登录成功"
+          : "Trae 登录已取消，输入内容已保留",
         tone: authenticated ? "ready" : "error",
         persistent: !authenticated,
       });

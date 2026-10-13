@@ -2,7 +2,8 @@
 set -euo pipefail
 
 project_root="$(cd "$(dirname "$0")/.." && pwd)"
-temporary_root="$(mktemp -d)"
+mkdir -p "$project_root/.work"
+temporary_root="$(mktemp -d "$project_root/.work/icons-XXXXXX")"
 iconset="$temporary_root/app-icon.iconset"
 mkdir -p "$iconset"
 trap 'rm -rf "$temporary_root"' EXIT

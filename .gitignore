@@ -5,3 +5,5 @@ release/
 coverage/
 *.log
 *.enc
+.work/
+local-archive/

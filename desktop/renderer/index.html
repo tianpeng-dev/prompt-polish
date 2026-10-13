@@ -7,61 +7,169 @@
       content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; font-src 'self'"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>精炼台</title>
+    <title>PromptPolish</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <main class="compact-shell">
-      <section class="prompt-box" aria-label="提示词优化输入框">
-        <div class="window-drag-rail" aria-hidden="true"></div>
-        <button
-          class="pin-button"
-          id="pin-button"
-          type="button"
-          aria-label="取消窗口置顶"
-          aria-pressed="true"
-          title="取消窗口置顶"
-        >
-          <span class="icon icon--pin" aria-hidden="true"></span>
-        </button>
-        <label class="sr-only" for="editor">需要优化的提示词</label>
-        <textarea
-          id="editor"
-          maxlength="2000"
-          spellcheck="false"
-          autofocus
-          placeholder="输入需要优化的内容…"
-        ></textarea>
-        <div class="refresh-layer" aria-hidden="true">
-          <div class="refresh-text" id="refresh-text"></div>
+    <main class="compact-shell" data-view="editor" data-side="below">
+      <section class="prompt-box" aria-label="提示词编辑器">
+        <header class="window-drag-rail">
+          <span class="brand">PromptPolish</span>
+          <div class="header-actions">
+            <button
+              id="connection-button"
+              class="connection-button"
+              type="button"
+              aria-label="检查 Trae 连接"
+              title="检查 Trae 连接"
+            >
+              <span class="connection-dot" aria-hidden="true"></span
+              ><span id="connection-label">Trae</span>
+            </button>
+            <button
+              id="settings-button"
+              class="icon-button"
+              type="button"
+              aria-label="打开设置"
+              title="设置"
+            >
+              <span class="icon icon--settings" aria-hidden="true"></span>
+            </button>
+            <button
+              id="pin-button"
+              class="icon-button pin-button"
+              type="button"
+              aria-label="取消窗口置顶"
+              aria-pressed="true"
+              title="取消窗口置顶"
+            >
+              <span class="icon icon--pin" aria-hidden="true"></span>
+            </button>
+          </div>
+        </header>
+        <div class="editor-area">
+          <label class="sr-only" for="editor">问题或需要优化的内容</label>
+          <textarea
+            id="editor"
+            spellcheck="false"
+            autofocus
+            placeholder="输入需要优化的内容…"
+          ></textarea>
+          <div class="refresh-layer" aria-hidden="true">
+            <div class="refresh-text" id="refresh-text"></div>
+          </div>
         </div>
+        <footer class="utility-rail">
+          <button
+            class="method-trigger"
+            id="method-trigger"
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded="false"
+            aria-controls="method-panel"
+            title="选择思考方法并复制提示词"
+          >
+            <span class="icon icon--brain" aria-hidden="true"></span
+            ><span>思考方法</span>
+          </button>
+          <div class="status-slot">
+            <span
+              id="character-count"
+              class="character-count"
+              title="输入最多 2000 个字符"
+              >0 / 2000</span
+            ><button
+              class="toast"
+              id="status"
+              type="button"
+              aria-live="polite"
+              hidden
+            ></button>
+            <div id="method-copy-actions" class="method-copy-actions" hidden>
+              <button
+                id="method-copy-view"
+                class="feedback-button"
+                type="button"
+                title="查看已复制的提示词"
+              >
+                查看
+              </button>
+              <button
+                id="method-copy-undo"
+                class="feedback-button"
+                type="button"
+                title="撤销上次方法复制"
+              >
+                撤销
+              </button>
+            </div>
+          </div>
+          <button
+            class="icon-button copy-button"
+            id="copy-button"
+            type="button"
+            aria-label="复制内容"
+            title="复制内容"
+            hidden
+          >
+            <span class="icon icon--copy" aria-hidden="true"></span>
+          </button>
+          <button
+            class="action-button"
+            id="action-button"
+            type="button"
+            data-mode="optimize"
+            aria-label="优化输入内容"
+            title="优化输入内容（Enter）"
+            disabled
+          >
+            <span
+              class="icon action-icon action-icon--optimize icon--sparkles"
+              aria-hidden="true"
+            ></span
+            ><span
+              class="icon action-icon action-icon--undo icon--undo"
+              aria-hidden="true"
+            ></span
+            ><span id="action-label">优化</span><kbd id="action-key">Enter</kbd>
+          </button>
+        </footer>
+      </section>
 
+      <section
+        class="method-panel"
+        id="method-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="method-title"
+        hidden
+      >
+        <header class="panel-heading window-drag-heading">
+          <h2 id="method-title">思考方法</h2>
+          <button
+            id="method-close"
+            class="icon-button"
+            type="button"
+            aria-label="返回编辑器"
+            title="返回编辑器（Escape）"
+          >
+            <span class="icon icon--close" aria-hidden="true"></span>
+          </button>
+        </header>
+        <p class="method-instruction">点击方法，复制提示词</p>
+        <p id="method-context" class="method-context"></p>
+        <div
+          id="method-menu"
+          class="method-menu"
+          role="menu"
+          aria-label="选择方法并复制提示词"
+        ></div>
         <p
-          class="toast"
-          id="status"
+          id="method-description"
+          class="method-description"
           role="status"
           aria-live="polite"
-          hidden
         ></p>
-
-        <button
-          class="action-button"
-          id="action-button"
-          type="button"
-          data-mode="optimize"
-          aria-label="优化输入内容"
-          title="优化输入内容（Enter）"
-          disabled
-        >
-          <span
-            class="icon action-icon action-icon--optimize icon--sparkles"
-            aria-hidden="true"
-          ></span>
-          <span
-            class="icon action-icon action-icon--undo icon--undo"
-            aria-hidden="true"
-          ></span>
-        </button>
       </section>
 
       <section
@@ -72,55 +180,93 @@
         aria-labelledby="settings-title"
         hidden
       >
-        <div class="settings-heading window-drag-heading">
-          <h2 id="settings-title">设置</h2>
+        <header class="settings-heading window-drag-heading">
+          <h2 id="settings-title">
+            <span class="icon icon--settings" aria-hidden="true"></span>设置
+          </h2>
           <button
-            class="close-button"
+            class="icon-button"
             id="settings-close"
             type="button"
             aria-label="关闭设置"
           >
             <span class="icon icon--close" aria-hidden="true"></span>
           </button>
-        </div>
-
-        <label class="setting-row" for="launch-toggle">
-          <span>
-            <strong>登录时启动</strong>
-            <small>静默驻留在系统托盘</small>
-          </span>
-          <input id="launch-toggle" type="checkbox" />
-          <span class="switch" aria-hidden="true"></span>
-        </label>
-
-        <label class="setting-row" for="shortcut-clipboard-toggle">
-          <span>
-            <strong>快捷键自动优化剪贴板</strong>
-            <small>填入、优化并覆盖剪贴板</small>
-          </span>
-          <input id="shortcut-clipboard-toggle" type="checkbox" />
-          <span class="switch" aria-hidden="true"></span>
-        </label>
-
+        </header>
+        <label class="setting-row" for="launch-toggle"
+          ><span
+            ><strong>登录时启动</strong
+            ><small>启动后驻留在系统托盘。</small></span
+          ><input id="launch-toggle" type="checkbox" /><span
+            class="switch"
+            aria-hidden="true"
+          ></span
+        ></label>
+        <label class="setting-row" for="shortcut-clipboard-toggle"
+          ><span
+            ><strong>快捷键自动优化剪贴板</strong
+            ><small>使用普通优化，成功后更新剪贴板。</small></span
+          ><input id="shortcut-clipboard-toggle" type="checkbox" /><span
+            class="switch"
+            aria-hidden="true"
+          ></span
+        ></label>
         <div class="setting-row">
-          <span>
-            <strong>全局快捷键</strong>
-            <small>点击后按下新组合键</small>
-          </span>
-          <button
+          <span
+            ><strong id="shortcut-heading">全局快捷键</strong
+            ><small id="shortcut-hint">点击后按下新组合键</small></span
+          ><button
             class="shortcut-recorder"
             id="shortcut-recorder"
             type="button"
+            aria-label="录制全局快捷键"
           >
             <kbd id="shortcut-label">⌥⌘P</kbd>
           </button>
         </div>
-        <p
-          class="settings-status"
-          id="settings-status"
-          role="status"
-          aria-live="polite"
-        ></p>
+        <div class="settings-feedback">
+          <p
+            class="settings-status"
+            id="settings-status"
+            role="status"
+            aria-live="polite"
+          ></p>
+          <button id="settings-retry" class="text-button" type="button" hidden>
+            重试保存
+          </button>
+        </div>
+      </section>
+
+      <section
+        id="detail-panel"
+        class="detail-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="detail-title"
+        hidden
+      >
+        <header class="panel-heading window-drag-heading">
+          <h2 id="detail-title">操作详情</h2>
+          <button
+            id="detail-close"
+            class="icon-button"
+            type="button"
+            aria-label="关闭操作详情"
+          >
+            <span class="icon icon--close" aria-hidden="true"></span>
+          </button>
+        </header>
+        <p id="detail-message" class="detail-message"></p>
+        <p class="detail-hint">输入内容已保留。检查连接后可以重新执行。</p>
+        <div class="detail-actions">
+          <button id="detail-copy" class="text-button" type="button">
+            复制详情</button
+          ><button id="detail-dismiss" class="text-button" type="button">
+            保留草稿</button
+          ><button id="detail-retry" class="primary-button" type="button">
+            重试
+          </button>
+        </div>
       </section>
     </main>
     <script type="module" src="../../dist/desktop/renderer/app.js"></script>

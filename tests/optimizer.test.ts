@@ -9,6 +9,7 @@ describe("validateInput", () => {
   it("rejects empty and overlong input", () => {
     expect(() => validateInput("   ")).toThrow("请输入");
     expect(() => validateInput("x".repeat(2001))).toThrow("2000");
+    expect(() => validateInput(" ".repeat(2000) + "x")).toThrow("2000");
   });
 
   it("accepts the exact 2000-character boundary and English input", () => {

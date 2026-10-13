@@ -3,8 +3,9 @@ import fs from "node:fs";
 import * as disk from "node:fs/promises";
 import path from "node:path";
 import vm from "node:vm";
-import { tmpdir } from "node:os";
+import { runtimeDirectory } from "./runtime-directory.js";
 import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 import ts from "typescript";
 import { assertTrustedSender } from "../desktop/ipc-security.js";
 
@@ -17,15 +18,14 @@ afterEach(async () => {
 
 /** Runs the actual main-process functions without initializing Electron or touching user data. */
 async function mainHarness() {
-  const directory = await disk.mkdtemp(
-    path.join(tmpdir(), "refiner-main-test-"),
-  );
+  const directory = runtimeDirectory("refiner-main-test-");
   directories.push(directory);
   const filename = path.join(directory, "settings.json");
   const loginItem = vi.fn();
   const setAlwaysOnTop = vi.fn();
   const register = vi.fn(() => true);
   const unregister = vi.fn();
+  let clipboardText = "隔离测试剪贴板";
   const handlers = new Map<string, (...args: any[]) => any>();
   const mainFrame = { url: "" };
   const contents = {
@@ -44,6 +44,12 @@ async function mainHarness() {
     },
   };
   const electron = {
+    clipboard: {
+      readText: () => clipboardText,
+      writeText: (text: string) => {
+        clipboardText = text;
+      },
+    },
     app: {
       requestSingleInstanceLock: () => false,
       quit() {},
@@ -65,7 +71,7 @@ async function mainHarness() {
     cache.set(file, module);
     let source = fs.readFileSync(file, "utf8");
     if (file === path.resolve("desktop", "main.ts"))
-      source += `\nObject.assign(exports, { updateSettings, settingsSnapshot, persistWindowPosition, setupIpc, configure(p, w) {settingsPath=p; mainWindow=w;} });`;
+      source += `\nObject.assign(exports, { updateSettings, settingsSnapshot, persistWindowPosition, setupIpc, configure(p, w) {settingsPath=p; mainWindow=w; clipboardController=createClipboardController({clipboard, optimize: async () => {throw new Error('隔离测试没有接入 Trae');}});} });`;
     const code = ts.transpileModule(source, {
       compilerOptions: {
         module: ts.ModuleKind.CommonJS,
@@ -125,6 +131,7 @@ async function mainHarness() {
     unregister,
     contents,
     handlers,
+    clipboardText: () => clipboardText,
     fail: () => {
       failWrite = true;
     },
@@ -216,12 +223,44 @@ describe("main-process settings transactions", () => {
   it("guards every registered IPC endpoint, including read-only requests", async () => {
     const h = await mainHarness();
     h.main.setupIpc();
-    expect(h.handlers.size).toBe(7);
+    expect(h.handlers.size).toBe(11);
     for (const handler of h.handlers.values())
       expect(() =>
         handler({ sender: {}, senderFrame: null }, "synthetic"),
       ).toThrow("拒绝未经授权");
     expect(h.handlers.has("clipboard:write")).toBe(false);
+  });
+
+  it("validates method copy and view requests in the main process with an isolated clipboard", async () => {
+    const h = await mainHarness();
+    h.main.setupIpc();
+    const url = pathToFileURL(
+      path.join(process.cwd(), "desktop/renderer/index.html"),
+    ).href;
+    h.contents.mainFrame.url = url;
+    const event = { sender: h.contents, senderFrame: h.contents.mainFrame };
+    const copy = h.handlers.get("thinking:copy")!;
+    expect(copy(event, "解释索引", "dual-layer").response.optimized).toContain(
+      "我的问题与背景：\n解释索引",
+    );
+    for (const args of [
+      [1, "dual-layer"],
+      ["x".repeat(10001), "dual-layer"],
+      ["x", "ordinary"],
+    ])
+      expect(() => copy(event, ...args)).toThrow();
+    expect(h.clipboardText()).toContain("我的问题与背景：\n解释索引");
+    expect(copy(event, "", "socratic").response.optimized).toContain(
+      "请先询问",
+    );
+    for (const input of [null, {}, "", "x".repeat(10001)])
+      expect(() => h.handlers.get("clipboard:copy")!(event, input)).toThrow(
+        "复制内容无效",
+      );
+    for (const view of [{ x: 100, height: 9000 }, null, "__proto__"])
+      expect(() => h.handlers.get("window:set-view")!(event, view)).toThrow(
+        "窗口视图无效",
+      );
   });
 });
 

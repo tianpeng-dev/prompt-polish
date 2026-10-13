@@ -375,6 +375,18 @@ export function createClipboardController(dependencies: {
   let running = false;
 
   return {
+    copy(text: unknown): { operationId: number } {
+      if (typeof text !== "string" || !text.trim() || text.length > 10_000)
+        throw new TypeError("复制内容无效。");
+      if (running) throw new Error("正在处理另一项优化，请稍候。");
+      const source = dependencies.clipboard.readText();
+      if (source === text && undoEntry?.output === text)
+        return { operationId: undoEntry.operationId };
+      dependencies.clipboard.writeText(text);
+      const operationId = ++sequence;
+      undoEntry = { source, output: text, operationId };
+      return { operationId };
+    },
     async optimize(expectedSource?: string): Promise<ClipboardOptimizeResult> {
       if (running) throw new Error("正在处理另一项优化，请稍候。");
       const source = dependencies.clipboard.readText();

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, rm, writeFile } from "node:fs/promises";
+import { runtimeDirectory } from "./runtime-directory.js";
 import path from "node:path";
 import { TraeApiError, type BackendStatus } from "../src/trae-client.js";
 
@@ -76,7 +76,7 @@ beforeEach(async () => {
   fake.windowToken = null;
   fake.load.mockResolvedValue(undefined);
   fake.session.fetch.mockResolvedValue(new Response("", { status: 401 }));
-  directory = await mkdtemp(path.join(tmpdir(), "refiner-auth-test-"));
+  directory = runtimeDirectory("refiner-auth-test-");
   tokenPath = path.join(directory, "token.enc");
 });
 afterEach(async () => {
@@ -247,5 +247,46 @@ describe("authentication recovery", () => {
     expect(fake.session.setPermissionCheckHandler.mock.calls.at(-1)[0]()).toBe(
       false,
     );
+  });
+
+  it("bounds a stalled official page load and cleans up its login window and listeners", async () => {
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    fake.load.mockImplementation(() => new Promise(() => {}));
+    const a = auth();
+    const login = a.login();
+    const assertion = expect(login).rejects.toThrow("无法打开 Trae 登录页");
+    await vi.waitFor(() => expect(fake.windows).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(15_001);
+    await assertion;
+    expect(fake.windows[0].dead).toBe(true);
+    expect(fake.session.cookies.listenerCount("changed")).toBe(0);
+    expect(a.authenticated).toBe(false);
+  });
+
+  it("reports real validation errors while retaining the official login window", async () => {
+    const progress = vi.fn();
+    const a = new TraeWebAuth({
+      tokenPath,
+      devTools: false,
+      onLoginStarted() {},
+      onLoginFinished() {},
+      onLoginProgress: progress,
+      validateToken: async () => "valid",
+    });
+    fake.session.fetch.mockResolvedValue(new Response("", { status: 503 }));
+    const login = a.login().catch((error: Error) => error.message);
+    await tick();
+    fake.windows[0].webContents.emit("did-finish-load");
+    await tick();
+    expect(progress).toHaveBeenCalledWith("请在 Trae 官方窗口完成登录");
+    expect(progress).toHaveBeenCalledWith(
+      "Trae 登录服务暂时不可用，请稍后重试。",
+      "error",
+    );
+    expect(fake.windows[0].dead).toBe(false);
+    fake.windows[0].destroy();
+    expect(await login).toBe("已取消 Trae 登录。");
   });
 });

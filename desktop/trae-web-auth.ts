@@ -29,6 +29,7 @@ export class TraeLoginRequiredError extends Error {
 
 type TraeWebAuthOptions = {
   onLoginStarted(): void;
+  onLoginProgress?(message: string, tone?: "neutral" | "error"): void;
   onLoginFinished(authenticated: boolean): void;
   devTools: boolean;
   tokenPath: string;
@@ -276,8 +277,8 @@ export class TraeWebAuth {
       minWidth: 420,
       minHeight: 560,
       show: false,
-      title: "登录 Trae",
-      backgroundColor: "#111827",
+      title: "PromptPolish · 登录 Trae CN",
+      backgroundColor: "#202125",
       autoHideMenuBar: true,
       alwaysOnTop: true,
       webPreferences: {
@@ -295,11 +296,13 @@ export class TraeWebAuth {
       let checking = false;
       let retryAfter = 0;
       let failures = 0;
+      let navigationDeadline: ReturnType<typeof setTimeout> | null = null;
       const cookieListener = () => void probe();
       const poll = setInterval(() => void probe(), LOGIN_POLL_MS);
 
       const cleanup = () => {
         clearInterval(poll);
+        if (navigationDeadline !== null) clearTimeout(navigationDeadline);
         this.authSession.cookies.removeListener("changed", cookieListener);
         if (this.loginWindow === window) this.loginWindow = null;
       };
@@ -349,8 +352,14 @@ export class TraeWebAuth {
             await finish(token);
           }
           failures = 0;
-        } catch {
+        } catch (error) {
           // Keep the login window alive on transient service failures. No unhandled promise.
+          this.options.onLoginProgress?.(
+            error instanceof TraeApiError
+              ? error.message
+              : "无法验证 Trae 登录状态，请检查连接后重试。",
+            "error",
+          );
           failures += 1;
           retryAfter =
             Date.now() +
@@ -365,7 +374,12 @@ export class TraeWebAuth {
       window.on("closed", () => {
         void finish(null, new TraeLoginRequiredError("已取消 Trae 登录。"));
       });
-      window.webContents.on("did-finish-load", () => void probe());
+      window.webContents.on("did-finish-load", () => {
+        if (navigationDeadline !== null) clearTimeout(navigationDeadline);
+        navigationDeadline = null;
+        this.options.onLoginProgress?.("请在 Trae 官方窗口完成登录");
+        void probe();
+      });
       window.webContents.on("did-navigate", () => void probe());
       window.webContents.on("did-redirect-navigation", () => void probe());
       window.webContents.on("will-navigate", (event, url) => {
@@ -375,6 +389,15 @@ export class TraeWebAuth {
         if (!isAllowedLoginUrl(url)) event.preventDefault();
       });
       const loadLoginUrl = (url: string) => {
+        if (navigationDeadline !== null) clearTimeout(navigationDeadline);
+        navigationDeadline = setTimeout(
+          () =>
+            void finish(
+              null,
+              new Error("无法打开 Trae 登录页，请检查网络后重试。"),
+            ),
+          15_000,
+        );
         void window.loadURL(url).catch((error: unknown) => {
           // Chromium cancels superseded navigations with ERR_ABORTED; the new load may succeed.
           const code = (error as { code?: string; errno?: number })?.code;

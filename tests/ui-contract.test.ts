@@ -16,10 +16,11 @@ describe("desktop packaging and UI contracts", () => {
     const css = await readFile("desktop/renderer/styles.css", "utf8");
     expect(css).toContain("app-region: drag");
     expect(css).toContain("app-region: no-drag");
-    expect(css).toContain("bottom: var(--utility-rail-height)");
-    expect(css).toContain("inset: 0 0 var(--utility-rail-height)");
+    expect(css).toContain(".editor-area");
+    expect(css).toContain("min-height: 0");
+    expect(css).toContain(".utility-rail");
     expect(css).toContain("input:focus-visible + .switch");
-    expect(css).toContain(".toast.is-expanded");
+    expect(css).toContain(".detail-panel");
     expect(css).toContain("@media (prefers-reduced-motion: reduce)");
   });
   it("bundles the sandbox preload without local requires and the renderer without Node dependencies", async () => {
@@ -44,9 +45,12 @@ describe("desktop packaging and UI contracts", () => {
   });
   it("never implicitly publishes while packaging and verifies macOS signatures", async () => {
     const pkg = JSON.parse(await readFile("package.json", "utf8"));
-    for (const script of ["pack:mac", "pack:win"])
-      expect(pkg.scripts[script]).toContain("--publish never");
+    expect(pkg.scripts["pack:win"]).toContain("--publish never");
+    expect(pkg.scripts["pack:mac"]).toContain("node scripts/pack-mac.mjs");
+    const macScript = await readFile("scripts/pack-mac.mjs", "utf8");
+    expect(macScript).toMatch(/"--publish",\s*"never"/);
     expect(pkg.build.mac.identity).toBe("-");
+    expect(pkg.build.afterPack).toBe("scripts/after-pack.mjs");
     const verifier = await readFile(
       "scripts/verify-mac-distribution.sh",
       "utf8",
