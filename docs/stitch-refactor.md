@@ -59,7 +59,8 @@
 | 原生跨应用焦点与失焦 | 本轮没有执行跨应用前台切换；失焦显示／隐藏决策使用明确窗口事件注入检查。真实跨应用切换未验证 | 未测 |
 | Trae 真实请求 | 本轮测试使用独立数据目录，没有登录凭据，未执行真实模型优化。依赖隔离测试不代表服务验收 | 受阻 |
 | macOS 安装包与本机安装 | `release/JingLianTai-1.4.0-mac-arm64.zip`：完整临时签名和解压校验通过；已安装至 `/Applications/精炼台.app`。安装后签名有效，十个关键界面、功能与字体文件与最新编译逐字节一致；应用启动和重复启动均保持单实例，登录凭据与设置文件保留 | 通过 |
-| Windows 安装包 | 由 `.github/workflows/windows-build.yml` 在 Windows runner 上执行测试与 NSIS 构建；对应版本结果以 GitHub Actions 为准 | 未测 |
+| Windows CI 与安装包 | GitHub Actions `Windows build` run `38456841695`，源码提交 `00a86df`：13 个文件、125 项测试通过，NSIS x64 安装包构建成功。实际应用负载为 PE32+ x86-64 | 通过 |
+| 双平台包内容 | 两个成品均为 1.4.0，十五个关键代码、模板及字体文件与当前构建核对通过。Windows 的 HTML、CSS 与模板使用 CRLF，其内容经换行形式归一化后相同；其余文件逐字节一致。成品排除测试、本地运行记录及登录凭据 | 通过 |
 | Windows 原生交互 | 当前执行环境为 macOS，Windows 真机／VM 不可用；格式化、逻辑与包内容验证不能代替 Windows 交互验收 | 未测 |
 | 截图逐像素比较 | 当前用户规则禁止主动使用视觉功能；通过导出结构、规范与真实 DOM 几何测量检查布局 | 受阻 |
 
@@ -67,6 +68,8 @@
 
 - 当前编译文件：`dist/desktop/`、`dist/src/` 与本地字体资源；Renderer 从应用内部 HTML 加载。
 - macOS 安装包：`release/JingLianTai-1.4.0-mac-arm64.zip`；本机安装：`/Applications/精炼台.app`，版本 1.4.0、arm64。
+- Windows 安装包：`release/JingLianTai-1.4.0-win-x64.exe`，来自上述 GitHub Actions Windows runner 的成功构建。
+- 安装包校验值：`release/SHA256SUMS.txt`。
 - 本机安装记录、原应用备份及原生运行证据保存在 `local-archive/`。该目录已被 Git 忽略，不进入仓库或安装包。
 - 构建：Node 24、pnpm 9；`pnpm install --frozen-lockfile`、`pnpm test`、`pnpm typecheck`、`pnpm format:check`、`pnpm smoke:electron`、`pnpm smoke:main`、`pnpm pack:mac`、`pnpm pack:win`。
 - 本机安装保留原应用身份和数据格式。正式发布包含 macOS arm64 与 Windows x64 安装包；真实 Trae 请求、Windows 真机交互与 Apple 公证的验证边界保持如上记录。
