@@ -113,15 +113,20 @@ describe("bounded non-redirecting Trae transport", () => {
       "https://www.trae.cn.evil.test",
       "https://www.trae.cn:444",
       "https://user@www.trae.cn",
+      "http://accounts.doubao.com/authorize",
+      "https://accounts.doubao.com.evil.test/authorize",
+      "https://accounts.doubao.com:444/authorize",
+      "https://user@accounts.doubao.com/authorize",
     ]) {
       expect(isAllowedLoginUrl(url)).toBe(false);
       expect(isTraeWebsiteUrl(url)).toBe(false);
     }
-    expect(
-      isAllowedLoginUrl("https://open.weixin.qq.com/connect/qrconnect"),
-    ).toBe(true);
-    expect(
-      isTraeWebsiteUrl("https://open.weixin.qq.com/connect/qrconnect"),
-    ).toBe(false);
+    for (const url of [
+      "https://open.weixin.qq.com/connect/qrconnect",
+      "https://accounts.doubao.com/authorize",
+    ]) {
+      expect(isAllowedLoginUrl(url)).toBe(true);
+      expect(isTraeWebsiteUrl(url)).toBe(false);
+    }
   });
 });

@@ -55,6 +55,7 @@ export function isAllowedLoginUrl(value: string): boolean {
         "open.weixin.qq.com",
         "passport.feishu.cn",
         "accounts.feishu.cn",
+        "accounts.doubao.com",
       ].includes(url.hostname)
     );
   } catch {
