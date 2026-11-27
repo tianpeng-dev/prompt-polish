@@ -2,7 +2,7 @@
 
 PromptPolish 是一款轻量的 macOS 菜单栏与 Windows 系统托盘提示词工具。“优化”调用 Trae 并原位替换正文；打开“思考方法”，点击任意方法即可将组合后的提示词复制到剪贴板，编辑器正文保持不变。
 
-当前源码版本为 1.4.0。应用安装名称“精炼台”、`JingLianTai-*` 文件名、Bundle ID、登录凭据与设置保持兼容。界面采用 Stitch 设计的紧凑深色风格。
+当前源码版本为 1.4.1。应用安装名称“精炼台”、`JingLianTai-*` 文件名、Bundle ID、登录凭据与设置保持兼容。界面采用 Stitch 设计的紧凑深色风格。
 
 应用不需要安装或运行 TraeCode。首次优化时会在应用内打开 Trae 官方登录页面，登录成功后即可独立使用。
 
@@ -37,13 +37,13 @@ PromptPolish 是一款轻量的 macOS 菜单栏与 Windows 系统托盘提示词
 
 ### macOS
 
-1. 下载 `JingLianTai-1.4.0-mac-arm64.zip`，解压后将“精炼台.app”移动到 `/Applications`。
+1. 下载 `JingLianTai-1.4.1-mac-arm64.zip`，解压后将“精炼台.app”移动到 `/Applications`。
 2. 当前安装包采用完整临时签名，但未进行 Apple 公证。首次安装后在“终端”执行：`xattr -cr "/Applications/精炼台.app"`。
 3. 双击打开精炼台，再点击顶部菜单栏的闪光图标开始使用。
 
 ### Windows
 
-1. 下载 `JingLianTai-1.4.0-win-x64.exe` 并运行安装程序。
+1. 下载 `JingLianTai-1.4.1-win-x64.exe` 并运行安装程序。
 2. 当前版本未进行 Windows 代码签名，Microsoft Defender SmartScreen 可能提示“Windows 已保护你的电脑”；确认来源后选择“更多信息”再运行。
 3. 安装完成后，从开始菜单打开精炼台，应用会驻留在任务栏通知区域。
 
@@ -119,8 +119,8 @@ pnpm pack:win
 构建产物输出到：
 
 ```text
-release/JingLianTai-1.4.0-mac-arm64.zip
-release/JingLianTai-1.4.0-win-x64.exe
+release/JingLianTai-1.4.1-mac-arm64.zip
+release/JingLianTai-1.4.1-win-x64.exe
 ```
 
 ## 技术说明与限制

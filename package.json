@@ -1,6 +1,6 @@
 {
   "name": "prompt-refiner-mvp",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "驻留在 macOS 菜单栏或 Windows 系统托盘的 Trae 提示词优化器",
   "author": "精炼台",
   "private": true,
